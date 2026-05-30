@@ -671,6 +671,15 @@ button {
   outline: none;
   border-color: var(--accent);
 }
+.rr-day-badge {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: var(--txt-faint);
+  padding-top: 2px;
+}
+.rr-day-badge[data-tracks='true'] {
+  color: var(--good);
+}
 .rr-check-btn {
   margin-top: 2px;
   padding: 7px 10px;

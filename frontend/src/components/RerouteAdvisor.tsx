@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { useRecommendation } from '../hooks/useFlights'
 import type { AirportLoad, RecommendRequest } from '../api/types'
 
-// Days available in the DB (ASI dataset + BTS Christmas 2025).
+// hasTracks = true means a matching ASI scenario exists → map shows flight animation.
+// hasTracks = false means BTS historical data only → capacity analysis works, no map routes.
 const AVAILABLE_DAYS = [
-  { label: 'Aug 21 2025 (summer peak)', value: '2025-08-21', defaultUtc: '19:50' },
-  { label: 'Dec 25 2025 (Christmas)', value: '2025-12-25', defaultUtc: '20:00' },
-  { label: 'Jan 13 2026', value: '2026-01-13', defaultUtc: '20:00' },
-  { label: 'Mar 04 2026', value: '2026-03-04', defaultUtc: '20:00' },
-  { label: 'Apr 08 2026', value: '2026-04-08', defaultUtc: '20:00' },
+  { label: 'Aug 21 2025  (summer peak)', value: '2025-08-21', defaultUtc: '19:50', hasTracks: true },
+  { label: 'Jan 13 2026', value: '2026-01-13', defaultUtc: '20:00', hasTracks: true },
+  { label: 'Mar 04 2026', value: '2026-03-04', defaultUtc: '20:00', hasTracks: true },
+  { label: 'Apr 08 2026', value: '2026-04-08', defaultUtc: '20:00', hasTracks: true },
+  { label: 'Dec 25 2025  (Christmas)', value: '2025-12-25', defaultUtc: '20:00', hasTracks: false },
 ]
 
 const NYC_AIRPORTS = ['KJFK', 'KLGA', 'KEWR']
@@ -82,6 +83,9 @@ export default function RerouteAdvisor() {
               </option>
             ))}
           </select>
+          <div className="rr-day-badge" data-tracks={dayEntry.hasTracks}>
+            {dayEntry.hasTracks ? '● LIVE TRACKS ON MAP' : '○ HISTORICAL DATA · NO MAP TRACKS'}
+          </div>
         </div>
 
         <div className="rr-field">
