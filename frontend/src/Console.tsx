@@ -26,7 +26,6 @@ const DEFAULT_DAY = '2025-08-21' // start on a rich animated NYC day
 export default function Console() {
   const [dayId, setDayId] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>(null)
-  const [backend, setBackend] = useState<'webgpu' | 'canvas2d' | null>(null)
   const [band, setBand] = useState<'LOW' | 'HIGH'>('LOW')
   const [scope, setScope] = useState('all')
   const [view, setView] = useState<'baseline' | 'optimized'>('baseline')
@@ -126,8 +125,6 @@ export default function Console() {
         activeId={dayId ?? ''}
         onSelectDay={setDayId}
         scenario={scenario}
-        backend={backend}
-        loading={snapshotQ.isFetching || rebalanceQ.isFetching}
       />
 
       <main className="stage">
@@ -165,7 +162,7 @@ export default function Console() {
               airportScores={airportScores}
               selection={selection}
               onSelect={setSelection}
-              onBackend={setBackend}
+              onBackend={() => {}}
             />
           ) : !isSnapshot && hasDay ? (
             <DemandMode day={dayId} metros={dayMetros.length} />

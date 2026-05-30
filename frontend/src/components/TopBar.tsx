@@ -17,8 +17,6 @@ interface Props {
   activeId: string
   onSelectDay: (id: string) => void
   scenario: Scenario | null
-  backend: 'webgpu' | 'canvas2d' | null
-  loading?: boolean
 }
 
 function Fps() {
@@ -39,7 +37,7 @@ function Fps() {
   )
 }
 
-export default function TopBar({ tabs, activeId, onSelectDay, scenario, backend, loading }: Props) {
+export default function TopBar({ tabs, activeId, onSelectDay, scenario }: Props) {
   const clock = useClock()
   const active = scenario ? countActive(scenario, clock.t) : null
 
@@ -97,20 +95,6 @@ export default function TopBar({ tabs, activeId, onSelectDay, scenario, backend,
           <span className="hud-sub">tracks</span>
         </div>
         <Fps />
-        <div className="hud-stat">
-          <span className="hud-label">RENDER</span>
-          <span className="hud-val" data-good={backend === 'webgpu'}>
-            {backend === 'webgpu' ? 'WebGPU' : backend === 'canvas2d' ? 'Canvas2D' : '…'}
-          </span>
-          <span className="hud-sub">{backend === 'webgpu' ? 'MSAA·4' : 'fallback'}</span>
-        </div>
-        <div className="hud-stat">
-          <span className="hud-label">API LINK</span>
-          <span className="hud-val" data-good={!loading}>
-            {loading ? 'SYNC' : 'LIVE'}
-          </span>
-          <span className="hud-sub">:8000</span>
-        </div>
       </div>
     </header>
   )
