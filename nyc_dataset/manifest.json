@@ -1,0 +1,97 @@
+{
+  "airports": {
+    "core": [
+      "KEWR",
+      "KJFK",
+      "KLGA"
+    ],
+    "metro_extra": [
+      "KBDR",
+      "KCDW",
+      "KFRG",
+      "KHPN",
+      "KISP",
+      "KLDJ",
+      "KMMU",
+      "KSWF",
+      "KTEB"
+    ]
+  },
+  "days": [
+    {
+      "date": "2025-05-29",
+      "file": "nyc_2025-05-29.json",
+      "window_start": "2025-05-29T19:00:00+00:00",
+      "window_end": "2025-05-30T13:00:00+00:00",
+      "metro_flights": 1734,
+      "core_flights": 1439,
+      "departures_from_nyc": 883,
+      "arrivals_to_nyc": 866,
+      "per_core_airport": {
+        "KEWR": 377,
+        "KLGA": 616,
+        "KJFK": 447
+      }
+    },
+    {
+      "date": "2025-08-21",
+      "file": "nyc_2025-08-21.json",
+      "window_start": "2025-08-21T16:00:00+00:00",
+      "window_end": "2025-08-22T10:00:00+00:00",
+      "metro_flights": 1781,
+      "core_flights": 1424,
+      "departures_from_nyc": 898,
+      "arrivals_to_nyc": 894,
+      "per_core_airport": {
+        "KEWR": 448,
+        "KJFK": 419,
+        "KLGA": 558
+      }
+    },
+    {
+      "date": "2026-01-13",
+      "file": "nyc_2026-01-13.json",
+      "window_start": "2026-01-13T16:00:00+00:00",
+      "window_end": "2026-01-14T10:00:00+00:00",
+      "metro_flights": 1715,
+      "core_flights": 1425,
+      "departures_from_nyc": 856,
+      "arrivals_to_nyc": 880,
+      "per_core_airport": {
+        "KJFK": 396,
+        "KLGA": 616,
+        "KEWR": 414
+      }
+    },
+    {
+      "date": "2026-03-04",
+      "file": "nyc_2026-03-04.json",
+      "window_start": "2026-03-04T16:00:00+00:00",
+      "window_end": "2026-03-05T10:00:00+00:00",
+      "metro_flights": 1886,
+      "core_flights": 1504,
+      "departures_from_nyc": 959,
+      "arrivals_to_nyc": 945,
+      "per_core_airport": {
+        "KLGA": 626,
+        "KEWR": 474,
+        "KJFK": 405
+      }
+    },
+    {
+      "date": "2026-04-08",
+      "file": "nyc_2026-04-08.json",
+      "window_start": "2026-04-08T16:00:00+00:00",
+      "window_end": "2026-04-09T10:00:00+00:00",
+      "metro_flights": 1779,
+      "core_flights": 1419,
+      "departures_from_nyc": 895,
+      "arrivals_to_nyc": 905,
+      "per_core_airport": {
+        "KJFK": 404,
+        "KLGA": 557,
+        "KEWR": 459
+      }
+    }
+  ]
+}
