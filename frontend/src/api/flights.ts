@@ -3,6 +3,7 @@
 
 import { apiFetch } from './client'
 import type {
+  ArrivalsResponse,
   LandingsRequest,
   LandingsResponse,
   RecommendRequest,
@@ -12,6 +13,12 @@ import type {
   SectorPopulationResponse,
   SectorsResponse,
 } from './types'
+
+// Stored 5-minute arrival counts per airport for a day (GET /arrivals).
+// Used for non-NYC metros, whose data lives in the SQLite DB, not the JSON bundle.
+export function fetchArrivals(day: string): Promise<ArrivalsResponse> {
+  return apiFetch<ArrivalsResponse>(`/arrivals?day=${encodeURIComponent(day)}`)
+}
 
 // Returns the scenario list and the default scenario ID.
 export function fetchScenarios(): Promise<ScenariosResponse> {

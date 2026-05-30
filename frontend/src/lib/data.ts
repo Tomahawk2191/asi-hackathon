@@ -8,7 +8,7 @@
 
 import { lngLatToMercator } from './geo'
 import type { Metro } from './metros'
-import type { RoutesSnapshot } from '../api/types'
+import type { ArrivalFrequencyRow, RoutesSnapshot } from '../api/types'
 import type { Airport, Flight, Scenario, SectorFeature } from './types'
 
 const BUCKET_MS = 5 * 60 * 1000 // 5-minute arrival windows
@@ -51,6 +51,14 @@ const CAPACITY: Record<string, number> = {
   KSFO: 60,
   KOAK: 22,
   KSJC: 22,
+  // DB hubs (the 2025-12-25 arrival-count metros). These AARs come from the
+  // backend's airport_capacity table; anything absent falls back to 20 below.
+  KDEN: 72,
+  KDFW: 78,
+  KDAL: 36,
+  KPHX: 54,
+  KSEA: 46,
+  KLGB: 20,
 }
 
 // Parse a LOW-band sector GeoJSON FeatureCollection into SectorFeatures, keeping
@@ -186,6 +194,101 @@ export function deriveScenario(snap: RoutesSnapshot, metro: Metro): Scenario {
     bucketMs: BUCKET_MS,
     bucketCount,
     flights,
+    airports,
+    airportByIcao,
+    totalArrivalBuckets: totals,
+    coreIcaos: metro.core,
+    metroIcaos: metro.extra,
+  }
+}
+
+// Build the render-ready Scenario from stored 5-minute arrival counts (GET
+// /arrivals), used by non-NYC metros. The DB carries no route geometry, so
+// `flights` is empty by design — the map renders airport dots, the load board,
+// timeline, and sector grid, but no animated tracks. Coordinates come from the
+// metro registry (the DB has none).
+export function deriveScenarioFromDb(rows: ArrivalFrequencyRow[], metro: Metro): Scenario {
+  const metroAirports = [...metro.core, ...metro.extra]
+  const metroSet = new Set(metroAirports)
+  const filtered = rows.filter((r) => metroSet.has(r.airport))
+
+  // No rows for this metro: return a minimal but valid Scenario so the UI still
+  // mounts (single empty bucket, no airports).
+  if (filtered.length === 0) {
+    const t = metro.day ? Date.parse(metro.day + 'T00:00:00Z') : Date.now()
+    return {
+      date: metro.day ?? rows[0]?.day ?? '',
+      windowStart: t,
+      windowEnd: t,
+      bucketMs: BUCKET_MS,
+      bucketCount: 1,
+      flights: [],
+      airports: [],
+      airportByIcao: new Map(),
+      totalArrivalBuckets: new Int32Array(1),
+      coreIcaos: metro.core,
+      metroIcaos: metro.extra,
+    }
+  }
+
+  let windowStart = Infinity
+  let maxStart = -Infinity
+  for (const r of filtered) {
+    const t = Date.parse(r.bucket_start)
+    if (t < windowStart) windowStart = t
+    if (t > maxStart) maxStart = t
+  }
+  const windowEnd = maxStart + BUCKET_MS
+  const bucketCount = Math.max(1, Math.ceil((windowEnd - windowStart) / BUCKET_MS))
+
+  const arrivalsByAirport = new Map<string, Int32Array>()
+  const totals = new Int32Array(bucketCount)
+  const ensureAirport = (icao: string) => {
+    let a = arrivalsByAirport.get(icao)
+    if (!a) {
+      a = new Int32Array(bucketCount)
+      arrivalsByAirport.set(icao, a)
+    }
+    return a
+  }
+
+  for (const r of filtered) {
+    const b = Math.floor((Date.parse(r.bucket_start) - windowStart) / BUCKET_MS)
+    if (b < 0 || b >= bucketCount) continue
+    ensureAirport(r.airport)[b] += r.flight_count
+    totals[b] += r.flight_count
+  }
+
+  const coreSet = new Set(metro.core)
+  const airports: Airport[] = []
+  const airportByIcao = new Map<string, Airport>()
+  for (const icao of metroAirports) {
+    const ll = metro.coords?.[icao]
+    if (!ll) continue // db metros must supply coords; skip any without
+    const buckets = arrivalsByAirport.get(icao) ?? new Int32Array(bucketCount)
+    let arrivalsTotal = 0
+    for (let i = 0; i < buckets.length; i++) arrivalsTotal += buckets[i]
+    const a: Airport = {
+      icao,
+      lng: ll[0],
+      lat: ll[1],
+      isCore: coreSet.has(icao),
+      arrivalBuckets: buckets,
+      arrivalsTotal,
+      capacity: CAPACITY[icao] ?? 20,
+    }
+    airports.push(a)
+    airportByIcao.set(icao, a)
+  }
+  airports.sort((a, b) => b.arrivalsTotal - a.arrivalsTotal)
+
+  return {
+    date: metro.day ?? rows[0]?.day ?? '',
+    windowStart,
+    windowEnd,
+    bucketMs: BUCKET_MS,
+    bucketCount,
+    flights: [],
     airports,
     airportByIcao,
     totalArrivalBuckets: totals,

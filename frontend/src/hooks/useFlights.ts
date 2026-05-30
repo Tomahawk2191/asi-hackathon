@@ -4,6 +4,7 @@
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
+  fetchArrivals,
   fetchLandings,
   fetchRecommendation,
   fetchScenarios,
@@ -78,6 +79,16 @@ export function useRecommendation(req: RecommendRequest | null) {
     queryFn: () => fetchRecommendation(req!),
     enabled: req !== null,
     staleTime: 5 * 60 * 1000,
+  })
+}
+
+// Stored arrival frequency for a day (non-NYC metros). Pass null/false to stay dormant.
+export function useArrivals(day: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['arrivals', day],
+    queryFn: () => fetchArrivals(day!),
+    enabled: enabled && day !== null,
+    staleTime: Infinity,
   })
 }
 

@@ -84,6 +84,26 @@ export interface RecommendResponse {
   recommendation: string | null // best alternative ICAO, or null if target is fine
 }
 
+// /arrivals -- stored 5-minute arrival counts per airport for a day (SQLite DB).
+// Backs the non-NYC metros, which carry no route geometry.
+
+export interface ArrivalFrequencyRow {
+  day: string
+  direction: string
+  sector: string | null
+  airport: string
+  bucket_start: string // ISO-8601 UTC
+  flight_count: number
+}
+
+export interface ArrivalsResponse {
+  day: string
+  direction: string
+  sector: string | null
+  count: number
+  rows: ArrivalFrequencyRow[]
+}
+
 // /scenarios/{id}/routes (planned -- endpoint not yet live)
 
 // A single planned flight from the hackathon data bundle.
