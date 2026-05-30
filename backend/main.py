@@ -8,6 +8,7 @@ arrival airport.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -268,6 +269,132 @@ def arrivals(
     finally:
         conn.close()
     return {"day": day, "sector": sector, "count": len(rows), "rows": rows}
+
+
+# --- historic capacity (closest stored time) --------------------------------
+
+
+class CapacityRequest(BaseModel):
+    airports: list[str] = Field(
+        description="Airport ICAO codes, e.g. ['KJFK', 'KLGA'].", min_length=1
+    )
+    time: str = Field(description="ISO-8601 timestamp, e.g. 2025-08-21T18:03:00Z.")
+    day: Optional[str] = Field(
+        default=None,
+        description="Optional YYYY-MM-DD to restrict the search to one day.",
+    )
+
+
+class AirportCapacity(BaseModel):
+    airport: str
+    sector: Optional[str] = Field(description="LOW sector the airport sits in.")
+    flight_count: Optional[int] = Field(
+        description="Arrivals in the matched 5-minute window; 0 if none that "
+        "window, null if the airport has no stored data."
+    )
+    has_data: bool = Field(description="Whether any stored data exists for the airport.")
+
+
+class CapacityResponse(BaseModel):
+    requested_time: str
+    matched_time: str = Field(description="Closest stored 5-min bucket to the request.")
+    offset_seconds: int = Field(description="matched_time - requested_time, in seconds.")
+    day: str = Field(description="Day the matched bucket belongs to.")
+    airports: list[AirportCapacity]
+
+
+def _parse_time(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not parse time {value!r}; use ISO-8601 (e.g. 2025-08-21T18:03:00Z).",
+        )
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def compute_capacity(airports: list[str], time: str, day: Optional[str]) -> CapacityResponse:
+    """Historic arrival count per airport at the stored time closest to ``time``."""
+    airports = [a.upper() for a in airports]
+    if not airports:
+        raise HTTPException(status_code=400, detail="Provide at least one airport.")
+    requested = _parse_time(time)
+
+    conn = db.connect(DB_PATH)
+    try:
+        rows = db.read_airport_rows(conn, airports, day)
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "No stored arrival data for these airports.",
+                "hint": "Call /refresh first.",
+                "airports": airports,
+            },
+        )
+
+    # Closest stored 5-minute bucket to the requested time.
+    bucket_times = {r["bucket_start"]: datetime.fromisoformat(r["bucket_start"]) for r in rows}
+    matched = min(
+        bucket_times, key=lambda b: abs((bucket_times[b] - requested).total_seconds())
+    )
+
+    have_data = {r["airport"] for r in rows}
+    sector_by_airport = {r["airport"]: r["sector"] for r in rows}
+    at_matched = {r["airport"]: r for r in rows if r["bucket_start"] == matched}
+
+    per_airport = []
+    for airport in airports:
+        if airport not in have_data:
+            per_airport.append(
+                AirportCapacity(airport=airport, sector=None, flight_count=None, has_data=False)
+            )
+        elif airport in at_matched:
+            row = at_matched[airport]
+            per_airport.append(
+                AirportCapacity(
+                    airport=airport,
+                    sector=row["sector"],
+                    flight_count=row["flight_count"],
+                    has_data=True,
+                )
+            )
+        else:
+            per_airport.append(
+                AirportCapacity(
+                    airport=airport,
+                    sector=sector_by_airport[airport],
+                    flight_count=0,
+                    has_data=True,
+                )
+            )
+
+    return CapacityResponse(
+        requested_time=requested.isoformat(),
+        matched_time=matched,
+        offset_seconds=int((bucket_times[matched] - requested).total_seconds()),
+        day=next(iter(at_matched.values()))["day"],
+        airports=per_airport,
+    )
+
+
+@app.post("/capacity", response_model=CapacityResponse)
+def capacity(req: CapacityRequest):
+    """Historic arrival count for a set of airports at the closest stored time."""
+    return compute_capacity(req.airports, req.time, req.day)
+
+
+@app.get("/capacity", response_model=CapacityResponse)
+def capacity_get(
+    airports: list[str] = Query(default=[], description="Repeat per airport."),
+    time: str = Query(description="ISO-8601 timestamp, e.g. 2025-08-21T18:03:00Z."),
+    day: Optional[str] = Query(default=None),
+):
+    """Convenience GET form of POST /capacity."""
+    return compute_capacity(airports, time, day)
 
 
 if __name__ == "__main__":

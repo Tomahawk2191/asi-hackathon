@@ -74,3 +74,28 @@ def read_day(
         params.append(sector)
     query += " ORDER BY bucket_start, airport"
     return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def read_airport_rows(
+    conn: sqlite3.Connection,
+    airports: Iterable[str],
+    day: Optional[str] = None,
+) -> list[dict]:
+    """All stored rows for a set of airports (optionally restricted to a day).
+
+    Returns an empty list if ``airports`` is empty. The closest-time selection
+    is done by the caller so timestamp parsing stays in Python.
+    """
+    airports = list(airports)
+    if not airports:
+        return []
+    placeholders = ",".join("?" for _ in airports)
+    query = (
+        "SELECT day, sector, airport, bucket_start, flight_count "
+        f"FROM arrival_frequency WHERE airport IN ({placeholders})"
+    )
+    params: list = list(airports)
+    if day is not None:
+        query += " AND day = ?"
+        params.append(day)
+    return [dict(row) for row in conn.execute(query, params).fetchall()]

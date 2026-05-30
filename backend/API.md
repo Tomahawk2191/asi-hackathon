@@ -13,6 +13,8 @@ Interactive docs (Swagger): `http://localhost:8000/docs`.
 | POST   | `/refresh`   | Build & store the 5-min NYC arrival-frequency table for a day. |
 | GET    | `/refresh`   | Convenience query-param form of `POST /refresh`.               |
 | GET    | `/arrivals`  | Read back stored NYC arrival frequency for a day.              |
+| POST   | `/capacity`  | Historic arrival count for airports at the closest stored time. |
+| GET    | `/capacity`  | Convenience query-param form of `POST /capacity`.              |
 
 ---
 
@@ -131,6 +133,48 @@ one sector.
 curl -s "http://localhost:8000/arrivals?day=2025-08-21&sector=LOW_295"
 ```
 
+### `POST /capacity`
+
+Historic arrival load for a set of airports at a given time. Finds the **closest
+stored 5-minute bucket** to the requested time and returns each airport's arrival
+count there. Reads from the SQLite DB, so refresh the relevant day first.
+
+> "Capacity" here is the historic **arrivals-per-5-minutes** we store per airport
+> (observed throughput / demand), not a regulatory limit — that time series is the
+> only time-stamped per-airport data in the DB.
+
+**Request body**
+
+| Field      | Type       | Required | Description                                                  |
+| ---------- | ---------- | -------- | ------------------------------------------------------------ |
+| `airports` | `string[]` | yes      | ICAO codes (case-insensitive), e.g. `["KJFK","KLGA"]`.       |
+| `time`     | `string`   | yes      | ISO-8601 timestamp, e.g. `2025-08-21T18:03:00Z`.             |
+| `day`      | `string`   | no       | Restrict the search to one `YYYY-MM-DD`.                     |
+
+**Response** — `flight_count` is `0` when the airport had no arrivals in the
+matched window, and `null` when the airport has no stored data at all
+(`has_data: false`).
+
+```json
+{ "requested_time": "2025-08-21T18:03:00+00:00",
+  "matched_time": "2025-08-21T18:05:00+00:00",
+  "offset_seconds": 120,
+  "day": "2025-08-21",
+  "airports": [
+    { "airport": "KJFK", "sector": "LOW_295", "flight_count": 2, "has_data": true },
+    { "airport": "KLGA", "sector": "LOW_295", "flight_count": 5, "has_data": true } ] }
+```
+
+```bash
+curl -s -X POST http://localhost:8000/capacity -H 'Content-Type: application/json' \
+  -d '{"airports":["KJFK","KLGA","KEWR"],"time":"2025-08-21T18:03:00Z"}'
+```
+
+### `GET /capacity`
+
+Same as `POST /capacity`: repeat `airports`, e.g.
+`GET /capacity?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
+
 ---
 
 ### Storage
@@ -155,7 +199,7 @@ CREATE TABLE arrival_frequency (
 
 | Status | When                                                                       |
 | ------ | -------------------------------------------------------------------------- |
-| `400`  | Empty sector list (GET), or unknown sector name(s) (`detail.unknown`).      |
-| `404`  | Unknown `scenario` or `day` (`detail.available` lists valid values).        |
-| `422`  | Request body fails validation (e.g. empty `sector_names` on POST).          |
+| `400`  | Empty sector list (GET), unknown sector name(s), or unparseable `time`.      |
+| `404`  | Unknown `scenario`/`day`, or no stored data for the requested airports.      |
+| `422`  | Request body fails validation (e.g. empty `sector_names`/`airports`).        |
 | `500`  | `/refresh` found no NYC dataset files under `data/nyc_dataset/`.            |
