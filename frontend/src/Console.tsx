@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import FlightMap from './components/FlightMap'
+import CapacityMap from './components/CapacityMap'
 import TopBar from './components/TopBar'
 import Timeline from './components/Timeline'
 import SelectionPanel from './components/SelectionPanel'
@@ -44,13 +45,11 @@ export default function Console() {
 
   // day tabs: the snapshot scenarios + a CHRISTMAS tab (demand-only multi-metro)
   const tabs = useMemo(() => {
-    const t = (scenariosQ.data?.scenarios ?? []).map((d) => ({ id: d, label: d }))
-    const days = demandDaysQ.data?.days?.map((d) => d.day) ?? []
-    if (days.includes(CHRISTMAS) && !t.some((x) => x.id === CHRISTMAS)) {
-      t.push({ id: CHRISTMAS, label: 'CHRISTMAS' })
-    }
-    return t
-  }, [scenariosQ.data, demandDaysQ.data])
+    return (scenariosQ.data?.scenarios ?? []).map((d) => ({
+      id: d,
+      label: d === CHRISTMAS ? 'CHRISTMAS' : d,
+    }))
+  }, [scenariosQ.data])
 
   // metros available for the current day (for the sidebar's focus picker)
   const dayMetros = useMemo(
@@ -74,12 +73,16 @@ export default function Console() {
     [sectorsLowQ.data],
   )
 
-  // NYC airport ICAO -> utilization*100 for the active view, to color map circles.
+  // Airport ICAO -> utilization*100 for the active view, to color map circles.
+  // Covers all metros so CapacityMap (Christmas) and FlightMap (NYC days) both work.
   const airportScores = useMemo(() => {
-    const nyc = rebalanceQ.data?.metros.find((m) => m.metro === 'nyc')
-    if (!nyc) return null
+    if (!rebalanceQ.data) return null
     const key = view === 'baseline' ? 'util_before' : 'util_after'
-    return Object.fromEntries(nyc.airports.map((a) => [a.airport, a[key] * 100])) as Record<string, number>
+    const scores: Record<string, number> = {}
+    for (const metro of rebalanceQ.data.metros) {
+      for (const a of metro.airports) scores[a.airport] = a[key] * 100
+    }
+    return scores
   }, [rebalanceQ.data, view])
 
   // sim clock window: snapshot window for live days, demand window otherwise.
@@ -168,7 +171,10 @@ export default function Console() {
               onBackend={setBackend}
             />
           ) : !isSnapshot && hasDay ? (
-            <DemandMode day={dayId} metros={dayMetros.length} />
+            <CapacityMap
+              airportScores={airportScores}
+              label={`DEMAND MODE · ${dayId === CHRISTMAS ? 'CHRISTMAS 2025' : dayId} · ${dayMetros.length} METRO${dayMetros.length !== 1 ? 'S' : ''}`}
+            />
           ) : (
             <div className="boot">
               <div className="boot-mark">ASI · AIRPORT LOAD</div>
@@ -201,20 +207,3 @@ export default function Console() {
   )
 }
 
-// Shown for demand-only days (e.g. Christmas) that have no flight-geometry
-// snapshot — the load balancing happens in the sidebar.
-function DemandMode({ day, metros }: { day: string; metros: number }) {
-  return (
-    <div className="boot demand-mode">
-      <div className="boot-mark">DEMAND MODE · {day === CHRISTMAS ? 'CHRISTMAS 2025' : day}</div>
-      <div className="demand-msg">
-        {metros} METRO {metros === 1 ? 'AREA' : 'AREAS'} · {metros > 1 ? 'NATIONWIDE ARRIVAL DEMAND' : 'ARRIVAL DEMAND'}
-      </div>
-      <div className="demand-sub">
-        No live flight tracks for this day — it's an arrivals-demand dataset.
-        <br />
-        Airport load balancing (baseline → optimized) is in the left sidebar; scrub time below.
-      </div>
-    </div>
-  )
-}

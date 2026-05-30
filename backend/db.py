@@ -79,6 +79,14 @@ def write_day(
     return len(rows)
 
 
+def list_days(conn: sqlite3.Connection) -> list[dict]:
+    """Return [{day, direction}] rows for every distinct day in flight_frequency."""
+    rows = conn.execute(
+        "SELECT DISTINCT day FROM flight_frequency ORDER BY day"
+    ).fetchall()
+    return [{"day": r[0]} for r in rows]
+
+
 def read_day(
     conn: sqlite3.Connection,
     day: str,

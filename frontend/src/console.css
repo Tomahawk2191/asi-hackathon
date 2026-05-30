@@ -1051,21 +1051,23 @@ button {
 }
 
 /* ---------- demand mode (no flight geometry, e.g. Christmas) ---------- */
-.demand-mode {
-  gap: 14px;
-}
-.demand-msg {
-  font-size: 12px;
+/* overlay badge shown on the CapacityMap for demand-only days */
+.capacity-map-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  font-family: var(--mono);
+  font-size: 9px;
   letter-spacing: 0.18em;
   color: var(--accent);
-}
-.demand-sub {
-  font-size: 10px;
-  line-height: 1.8;
-  letter-spacing: 0.04em;
-  color: var(--txt-faint);
-  text-align: center;
-  max-width: 460px;
+  background: rgba(3, 4, 6, 0.78);
+  border: 1px solid rgba(255, 176, 0, 0.28);
+  border-radius: var(--r);
+  padding: 5px 12px;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 /* ---------- christmas tab accent ---------- */

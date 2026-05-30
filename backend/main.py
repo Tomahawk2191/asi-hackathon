@@ -22,6 +22,7 @@ import nyc
 import optimize as optimize_mod
 import population as population_mod
 import rebalance as rebalance_mod
+import synthetic
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -89,8 +90,18 @@ def _scenario_files() -> dict[str, Path]:
 
 
 def list_scenarios() -> list[str]:
-    """Available scenario ids -- the ``<date>`` of each ``nyc_<date>`` snapshot."""
-    return sorted(_scenario_files())
+    """Available scenario ids: file-based snapshots + demand-only days (BTS data).
+
+    Demand-only days (e.g. Christmas 2025) have no routes file but have arrival
+    counts in the DB — we synthesise their flight tracks on first request.
+    """
+    file_days = set(_scenario_files())
+    conn = db.connect(DB_PATH)
+    try:
+        demand_days = {r["day"] for r in db.list_days(conn)}
+    finally:
+        conn.close()
+    return sorted(file_days | demand_days)
 
 
 def default_scenario() -> Optional[str]:
@@ -108,8 +119,19 @@ def _routes_path(scenario: str) -> Path:
 
 @lru_cache(maxsize=None)
 def get_snapshot(scenario: str) -> RoutesSnapshot:
-    """Load and cache a scenario's routes snapshot."""
-    return load_routes(_routes_path(scenario))
+    """Load (or synthesise) and cache a scenario's routes snapshot."""
+    files = _scenario_files()
+    if scenario in files:
+        return load_routes(files[scenario])
+    # No snapshot file — synthesise from BTS demand data.
+    conn = db.connect(DB_PATH)
+    try:
+        data = synthetic.synthesize_snapshot(scenario, conn)
+    finally:
+        conn.close()
+    if not data:
+        raise FileNotFoundError(f"No routes file or demand data for scenario {scenario!r}")
+    return RoutesSnapshot(**data)
 
 
 @lru_cache(maxsize=None)
@@ -795,7 +817,7 @@ def recommend(req: RecommendRequest):
     day = req.day or DEFAULT_RECOMMEND_DAY
     t = _parse_time(req.time)
 
-    alts = [a.upper() for a in req.alternatives] if req.alternatives else NYC_CORE
+    alts = [a.upper() for a in req.alternatives] if req.alternatives is not None else NYC_CORE
     all_airports = list({airport} | set(alts))
 
     conn = db.connect(DB_PATH)
