@@ -13,8 +13,8 @@ Interactive docs (Swagger): `http://localhost:8000/docs`.
 | POST   | `/refresh`   | Build & store the 5-min NYC arrival-frequency table for a day. |
 | GET    | `/refresh`   | Convenience query-param form of `POST /refresh`.               |
 | GET    | `/arrivals`  | Read back stored NYC arrival frequency for a day.              |
-| POST   | `/capacity`  | Historic arrival count for airports at the closest stored time. |
-| GET    | `/capacity`  | Convenience query-param form of `POST /capacity`.              |
+| POST   | `/flights-inbound` | Inbound flight count for airports at the closest stored time. |
+| GET    | `/flights-inbound` | Convenience query-param form of `POST /flights-inbound`.      |
 
 ---
 
@@ -133,15 +133,15 @@ one sector.
 curl -s "http://localhost:8000/arrivals?day=2025-08-21&sector=LOW_295"
 ```
 
-### `POST /capacity`
+### `POST /flights-inbound`
 
-Historic arrival load for a set of airports at a given time. Finds the **closest
-stored 5-minute bucket** to the requested time and returns each airport's arrival
-count there. Reads from the SQLite DB, so refresh the relevant day first.
+Inbound flight count for a set of airports at a given time. Finds the **closest
+stored 5-minute bucket** to the requested time and returns each airport's inbound
+flight count there. Reads from the SQLite DB, so refresh the relevant day first.
 
-> "Capacity" here is the historic **arrivals-per-5-minutes** we store per airport
-> (observed throughput / demand), not a regulatory limit — that time series is the
-> only time-stamped per-airport data in the DB.
+> This is the historic **arrivals-per-5-minutes** we store per airport (observed
+> inbound throughput / demand), not a regulatory capacity limit — that time series
+> is the only time-stamped per-airport data in the DB.
 
 **Request body**
 
@@ -166,14 +166,14 @@ matched window, and `null` when the airport has no stored data at all
 ```
 
 ```bash
-curl -s -X POST http://localhost:8000/capacity -H 'Content-Type: application/json' \
+curl -s -X POST http://localhost:8000/flights-inbound -H 'Content-Type: application/json' \
   -d '{"airports":["KJFK","KLGA","KEWR"],"time":"2025-08-21T18:03:00Z"}'
 ```
 
-### `GET /capacity`
+### `GET /flights-inbound`
 
-Same as `POST /capacity`: repeat `airports`, e.g.
-`GET /capacity?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
+Same as `POST /flights-inbound`: repeat `airports`, e.g.
+`GET /flights-inbound?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
 
 ---
 

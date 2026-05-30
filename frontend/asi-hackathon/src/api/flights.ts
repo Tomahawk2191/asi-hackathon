@@ -24,8 +24,14 @@ export function fetchLandings(req: LandingsRequest): Promise<LandingsResponse> {
   })
 }
 
-// Returns all flights + metadata for a given scenario -- endpoint not yet live on the backend.
-// When it's ready, derive per-airport load and reroute candidates from the cached result.
+// Returns all flights + metadata for a given scenario (per-flight route geometry).
+// Backed by GET /scenarios/{id}/routes -- this is what the map animates.
 export function fetchSnapshot(scenarioId: string): Promise<RoutesSnapshot> {
   return apiFetch<RoutesSnapshot>(`/scenarios/${scenarioId}/routes`)
+}
+
+// Sector polygons as GeoJSON for the map (GET /sectors/geojson). Defaults to the
+// LOW band since landings happen at ground level.
+export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollection> {
+  return apiFetch<GeoJSON.FeatureCollection>(`/sectors/geojson?band=${encodeURIComponent(band)}`)
 }

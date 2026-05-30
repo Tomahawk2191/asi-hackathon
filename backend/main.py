@@ -7,6 +7,7 @@ arrival airport.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -32,7 +33,9 @@ app = FastAPI(title="ASI Hackathon API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # Allow the Vite dev server on any localhost port (it falls back to 5174+
+    # when 5173 is taken), plus 127.0.0.1.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -188,6 +191,24 @@ def scenarios():
     return {"scenarios": list_scenarios(), "default": default_scenario()}
 
 
+@app.get("/scenarios/{scenario}/routes", response_model=RoutesSnapshot)
+def scenario_routes(scenario: str):
+    """Full routes snapshot for a scenario: every flight with its planned path.
+
+    This is the per-flight geometry (waypoint ``lats`` / ``lons``, times,
+    origin/destination, altitude) the frontend animates on the map. Served
+    straight from the cached snapshot for the given scenario id (a YYYY-MM-DD
+    date from GET /scenarios).
+    """
+    available = list_scenarios()
+    if scenario not in available:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Unknown scenario {scenario!r}.", "available": available},
+        )
+    return get_snapshot(scenario)
+
+
 @app.get("/sectors")
 def sectors_summary():
     """Summarize the sectors (name, band, capacity) for picking names."""
@@ -204,6 +225,30 @@ def sectors_summary():
             for s in index.values()
         ],
     }
+
+
+@lru_cache(maxsize=1)
+def _sectors_geojson() -> dict:
+    """The raw sectors GeoJSON FeatureCollection, loaded once."""
+    return json.loads(SECTORS_PATH.read_text())
+
+
+@app.get("/sectors/geojson")
+def sectors_geojson(band: Optional[str] = Query(default=None, description="LOW or HIGH")):
+    """Sector polygons as GeoJSON, optionally filtered to one band (LOW/HIGH).
+
+    The map needs the actual geometry, which GET /sectors omits. The frontend
+    uses ``?band=LOW`` since landings happen at ground level.
+    """
+    gj = _sectors_geojson()
+    features = gj.get("features", [])
+    if band:
+        prefix = band.upper()
+        features = [
+            f for f in features
+            if str(f.get("properties", {}).get("name", "")).startswith(prefix)
+        ]
+    return {"type": "FeatureCollection", "features": features}
 
 
 @app.post("/landings", response_model=LandingsResponse)
@@ -299,10 +344,10 @@ def arrivals(
     return {"day": day, "sector": sector, "count": len(rows), "rows": rows}
 
 
-# --- historic capacity (closest stored time) --------------------------------
+# --- inbound flights (closest stored time) ----------------------------------
 
 
-class CapacityRequest(BaseModel):
+class FlightsInboundRequest(BaseModel):
     airports: list[str] = Field(
         description="Airport ICAO codes, e.g. ['KJFK', 'KLGA'].", min_length=1
     )
@@ -313,11 +358,11 @@ class CapacityRequest(BaseModel):
     )
 
 
-class AirportCapacity(BaseModel):
+class AirportInbound(BaseModel):
     airport: str
     sector: Optional[str] = Field(description="LOW sector the airport sits in.")
     flight_count: Optional[int] = Field(
-        description="Arrivals in the matched 5-minute window; 0 if none that "
+        description="Inbound flights in the matched 5-minute window; 0 if none that "
         "window, null if the airport has no stored data."
     )
     has_data: bool = Field(
@@ -325,14 +370,14 @@ class AirportCapacity(BaseModel):
     )
 
 
-class CapacityResponse(BaseModel):
+class FlightsInboundResponse(BaseModel):
     requested_time: str
     matched_time: str = Field(description="Closest stored 5-min bucket to the request.")
     offset_seconds: int = Field(
         description="matched_time - requested_time, in seconds."
     )
     day: str = Field(description="Day the matched bucket belongs to.")
-    airports: list[AirportCapacity]
+    airports: list[AirportInbound]
 
 
 def _parse_time(value: str) -> datetime:
@@ -346,10 +391,10 @@ def _parse_time(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def compute_capacity(
+def compute_flights_inbound(
     airports: list[str], time: str, day: Optional[str]
-) -> CapacityResponse:
-    """Historic arrival count per airport at the stored time closest to ``time``."""
+) -> FlightsInboundResponse:
+    """Inbound flight count per airport at the stored time closest to ``time``."""
     airports = [a.upper() for a in airports]
     if not airports:
         raise HTTPException(status_code=400, detail="Provide at least one airport.")
@@ -386,14 +431,14 @@ def compute_capacity(
     for airport in airports:
         if airport not in have_data:
             per_airport.append(
-                AirportCapacity(
+                AirportInbound(
                     airport=airport, sector=None, flight_count=None, has_data=False
                 )
             )
         elif airport in at_matched:
             row = at_matched[airport]
             per_airport.append(
-                AirportCapacity(
+                AirportInbound(
                     airport=airport,
                     sector=row["sector"],
                     flight_count=row["flight_count"],
@@ -402,7 +447,7 @@ def compute_capacity(
             )
         else:
             per_airport.append(
-                AirportCapacity(
+                AirportInbound(
                     airport=airport,
                     sector=sector_by_airport[airport],
                     flight_count=0,
@@ -410,7 +455,7 @@ def compute_capacity(
                 )
             )
 
-    return CapacityResponse(
+    return FlightsInboundResponse(
         requested_time=requested.isoformat(),
         matched_time=matched,
         offset_seconds=int((bucket_times[matched] - requested).total_seconds()),
@@ -419,20 +464,20 @@ def compute_capacity(
     )
 
 
-@app.post("/capacity", response_model=CapacityResponse)
-def capacity(req: CapacityRequest):
-    """Historic arrival count for a set of airports at the closest stored time."""
-    return compute_capacity(req.airports, req.time, req.day)
+@app.post("/flights-inbound", response_model=FlightsInboundResponse)
+def flights_inbound(req: FlightsInboundRequest):
+    """Inbound flight count for a set of airports at the closest stored time."""
+    return compute_flights_inbound(req.airports, req.time, req.day)
 
 
-@app.get("/capacity", response_model=CapacityResponse)
-def capacity_get(
+@app.get("/flights-inbound", response_model=FlightsInboundResponse)
+def flights_inbound_get(
     airports: list[str] = Query(default=[], description="Repeat per airport."),
     time: str = Query(description="ISO-8601 timestamp, e.g. 2025-08-21T18:03:00Z."),
     day: Optional[str] = Query(default=None),
 ):
-    """Convenience GET form of POST /capacity."""
-    return compute_capacity(airports, time, day)
+    """Convenience GET form of POST /flights-inbound."""
+    return compute_flights_inbound(airports, time, day)
 
 
 if __name__ == "__main__":
