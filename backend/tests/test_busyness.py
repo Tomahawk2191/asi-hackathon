@@ -175,13 +175,25 @@ def test_sister_airports_are_all_less_busy_least_busy_first(client):
     assert {"KTEB", "KHPN"} <= {s["airport"] for s in sisters}
 
 
-def test_sister_airports_radius_filter(client):
-    resp = client.get("/sister-airports", params={"airport": "KLGA", "radius_nm": 15, **PEAK})
-    assert resp.status_code == 200
-    sisters = resp.json()["sisters"]
-    assert sisters
-    for s in sisters:
-        assert s["distance_nm"] is not None and s["distance_nm"] <= 15
+def test_sister_airports_radius_filter_and_null_distance_exclusion(client):
+    # Without a radius, an airport with no flights to locate (null distance) is
+    # still surfaced as a (least-busy) sister.
+    no_radius = client.get("/sister-airports", params={"airport": "KLGA", **PEAK}).json()["sisters"]
+    assert any(s["distance_nm"] is None for s in no_radius)
+    # With a radius, every sister is locatable and within range -- null-distance
+    # airports are dropped, even when the radius is generous enough to cover the
+    # whole metro (max separation is ~55 nm).
+    within = client.get(
+        "/sister-airports", params={"airport": "KLGA", "radius_nm": 200, **PEAK}
+    ).json()["sisters"]
+    assert within
+    assert all(s["distance_nm"] is not None and s["distance_nm"] <= 200 for s in within)
+    # A tight radius really narrows it.
+    tight = client.get(
+        "/sister-airports", params={"airport": "KLGA", "radius_nm": 15, **PEAK}
+    ).json()["sisters"]
+    assert all(s["distance_nm"] <= 15 for s in tight)
+    assert len(tight) <= len(within)
 
 
 def test_busyness_bad_time_is_400(client):
@@ -191,3 +203,31 @@ def test_busyness_bad_time_is_400(client):
 def test_sister_airports_unknown_airport_is_404(client):
     resp = client.get("/sister-airports", params={"airport": "KZZZ", "scenario": "2025-08-21"})
     assert resp.status_code == 404
+
+
+def test_busyness_default_time_is_window_midpoint(client):
+    # 2025-08-21's window is 16:00Z -> next-day 10:00Z (18 h); midpoint = 01:00Z.
+    resp = client.get("/busyness", params={"scenario": "2025-08-21"})
+    assert resp.status_code == 200
+    assert resp.json()["time"] == "2025-08-22T01:00:00+00:00"
+
+
+def test_count_in_window_is_half_open_at_the_edges():
+    # center 12:00 + window 120 min -> window is [11:00, 13:00): lo inclusive,
+    # hi exclusive. Arrivals land exactly on each edge plus one inside.
+    d = "2025-01-01"
+    flights = [
+        _flight("LO", "KBOS", "KLGA", f"{d}T10:00:00Z", f"{d}T11:00:00Z", PT["KBOS"], PT["KLGA"]),
+        _flight("MID", "KBOS", "KLGA", f"{d}T12:49:00Z", f"{d}T12:59:00Z", PT["KBOS"], PT["KLGA"]),
+        _flight("HI", "KBOS", "KLGA", f"{d}T12:00:00Z", f"{d}T13:00:00Z", PT["KBOS"], PT["KLGA"]),
+    ]
+    snap = RoutesSnapshot(
+        asked_at=f"{d}T12:00:00Z",
+        window_start=f"{d}T11:00:00Z",
+        window_end=f"{d}T13:00:00Z",
+        nyc_filter=NycFilter(core=["KLGA"], metro_extra=[]),
+        flights=flights,
+    )
+    inbound, outbound = busyness.count_in_window(snap, _center(), window_minutes=120)["KLGA"]
+    assert inbound == 2  # LO (11:00, ==lo) counted, HI (13:00, ==hi) excluded, MID inside
+    assert outbound == 0  # origins are non-metro KBOS

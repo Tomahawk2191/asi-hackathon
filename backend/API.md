@@ -2,6 +2,7 @@
 
 FastAPI backend for the ASI hackathon air-traffic tools. Base URL: `http://localhost:8000`.
 Interactive docs (Swagger): `http://localhost:8000/docs`.
+New here? [`USAGE.md`](./USAGE.md) is a task-oriented walkthrough (quick start + recipes); this file is the per-endpoint reference.
 
 | Method | Path         | Summary                                                        |
 | ------ | ------------ | -------------------------------------------------------------- |

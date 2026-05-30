@@ -1,10 +1,11 @@
-"""SQLite storage for NYC-metro arrival frequency and airport capacity.
+"""SQLite storage for NYC-metro flight frequency and airport capacity.
 
 Two tables:
 
-- ``arrival_frequency`` -- per-(day, airport, 5-min bucket) arrival counts
-  (demand). Writes are idempotent per day: refreshing a day replaces that day's
-  rows.
+- ``flight_frequency`` -- per-(day, direction, airport, 5-min bucket) flight
+  counts (arrival + departure demand). Writes are idempotent per
+  (day, direction): refreshing a day replaces that day's rows for that
+  direction.
 - ``airport_capacity`` -- one VMC AAR (arrivals/hour) per airport (the capacity
   reference, sibling to demand). Writes replace the whole curated table.
 """

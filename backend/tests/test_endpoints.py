@@ -8,7 +8,7 @@ import db
 
 
 def _seed_demand(db_path, day, airport, counts, start="12:00"):
-    """Write synthetic arrival_frequency rows for one airport on one day."""
+    """Write synthetic arrival-direction flight_frequency rows for one airport."""
     t0 = datetime.fromisoformat(f"{day}T{start}:00+00:00")
     rows = [
         {
