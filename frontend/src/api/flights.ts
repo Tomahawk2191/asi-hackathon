@@ -45,11 +45,6 @@ export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollect
   return apiFetch<GeoJSON.FeatureCollection>(`/sectors/geojson?band=${encodeURIComponent(band)}`)
 }
 
-// Convective weather cells (boundary polygons) for a scenario (GET /weather).
-export function fetchWeather(scenario: string): Promise<GeoJSON.FeatureCollection> {
-  return apiFetch<GeoJSON.FeatureCollection>(`/weather?scenario=${encodeURIComponent(scenario)}`)
-}
-
 // Reroute recommendation: given a target airport + arrival time, scores all
 // NYC core airports by current rolling-hour demand and returns the best alternative.
 export function fetchRecommendation(req: RecommendRequest): Promise<RecommendResponse> {
