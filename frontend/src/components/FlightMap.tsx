@@ -468,6 +468,23 @@ export default function FlightMap({
     }
   }, [selection, scenario])
 
+  // --- fly the camera to a selected airport ----------------------------------
+  // Picking an airport (from the load board on the left, or a dot on the map)
+  // centers it. Read the scenario off the ref so switching days — which clears
+  // the selection — doesn't trigger a stray flight to the previous airport.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || selection?.kind !== 'airport') return
+    const ap = scenarioRef.current.airportByIcao.get(selection.icao)
+    if (!ap) return
+    map.flyTo({
+      center: [ap.lng, ap.lat],
+      zoom: Math.max(map.getZoom(), 9), // zoom in to focus, but never zoom back out
+      duration: 900,
+      essential: true,
+    })
+  }, [selection])
+
   return (
     <div className="map-wrap">
       <div ref={containerRef} className="map-canvas" />

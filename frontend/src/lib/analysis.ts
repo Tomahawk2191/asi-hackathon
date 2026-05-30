@@ -16,6 +16,9 @@ export interface AirportLoad {
   capacity: number
   ratio: number
   over: boolean
+  // busyness score: 100 * (arrivals + departures) / (2 * aar). ~100 = saturated
+  // (a balanced airport running its AAR for both arrivals and departures); can exceed 100.
+  score: number
 }
 
 // Per-airport rolling-hour load at sim time t, busiest first.
@@ -25,9 +28,13 @@ export function airportLoads(s: Scenario, t: number): AirportLoad[] {
     .map((a) => {
       const rolling = rollingHour(a.arrivalBuckets, b)
       const ratio = rolling / a.capacity
-      return { icao: a.icao, rolling, capacity: a.capacity, ratio, over: rolling > a.capacity }
+      // Movements-based busyness score, mirroring backend busyness.py: arrivals +
+      // departures over the same rolling hour, against a 2*AAR practical ceiling.
+      const movements = rolling + rollingHour(a.departureBuckets, b)
+      const score = Math.round((100 * movements) / (2 * a.aar))
+      return { icao: a.icao, rolling, capacity: a.capacity, ratio, over: rolling > a.capacity, score }
     })
-    .sort((x, y) => y.ratio - x.ratio)
+    .sort((x, y) => y.score - x.score)
 }
 
 // Set of ICAOs currently over capacity (used to color arriving aircraft red).

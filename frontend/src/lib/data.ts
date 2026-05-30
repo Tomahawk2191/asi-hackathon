@@ -29,6 +29,14 @@ const CAPACITY: Record<string, number> = {
   KLDJ: 12,
 }
 
+// VMC Airport Arrival Rate (arrivals/hr), mirroring the backend's curated
+// capacity.py VMC_AAR for the slot-controlled NYC core. Metro relievers have no
+// published FAA profile, so they fall back to REFERENCE_AAR (the busiest core
+// AAR) — exactly as the backend's busyness.py does — keeping every airport on
+// one comparable 0–100 busyness scale.
+const VMC_AAR: Record<string, number> = { KJFK: 52, KLGA: 40, KEWR: 52 }
+const REFERENCE_AAR = 100 // = max(capacity.VMC_AAR) (KATL) in the backend
+
 // Parse a LOW-band sector GeoJSON FeatureCollection into SectorFeatures, keeping
 // the outer ring flat for fast point-in-polygon tests.
 export function parseLowSectors(gj: GeoJSON.FeatureCollection): SectorFeature[] {
@@ -68,13 +76,14 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
   const flights: Flight[] = []
   const airportLngLat = new Map<string, { lng: number; lat: number }>()
   const arrivalsByAirport = new Map<string, Int32Array>()
+  const departuresByAirport = new Map<string, Int32Array>()
   const totals = new Int32Array(bucketCount)
 
-  const ensureAirport = (icao: string) => {
-    let a = arrivalsByAirport.get(icao)
+  const ensureBucket = (map: Map<string, Int32Array>, icao: string) => {
+    let a = map.get(icao)
     if (!a) {
       a = new Int32Array(bucketCount)
-      arrivalsByAirport.set(icao, a)
+      map.set(icao, a)
     }
     return a
   }
@@ -110,8 +119,12 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
 
     if (t1 >= windowStart && t1 < windowEnd) {
       const b = Math.floor((t1 - windowStart) / BUCKET_MS)
-      ensureAirport(rf.destination_airport_icao)[b]++
+      ensureBucket(arrivalsByAirport, rf.destination_airport_icao)[b]++
       totals[b]++
+    }
+    if (t0 >= windowStart && t0 < windowEnd) {
+      const b = Math.floor((t0 - windowStart) / BUCKET_MS)
+      ensureBucket(departuresByAirport, rf.origin_airport_icao)[b]++
     }
 
     flights.push({
@@ -137,6 +150,7 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
     const ll = airportLngLat.get(icao)
     if (!ll) continue
     const buckets = arrivalsByAirport.get(icao) ?? new Int32Array(bucketCount)
+    const depBuckets = departuresByAirport.get(icao) ?? new Int32Array(bucketCount)
     let arrivalsTotal = 0
     for (let i = 0; i < buckets.length; i++) arrivalsTotal += buckets[i]
     const a: Airport = {
@@ -145,8 +159,10 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
       lat: ll.lat,
       isCore: coreSet.has(icao),
       arrivalBuckets: buckets,
+      departureBuckets: depBuckets,
       arrivalsTotal,
       capacity: CAPACITY[icao] ?? 20,
+      aar: VMC_AAR[icao] ?? REFERENCE_AAR,
     }
     airports.push(a)
     airportByIcao.set(icao, a)
