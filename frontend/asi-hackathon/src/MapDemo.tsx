@@ -38,7 +38,7 @@ function MapDemo() {
     <section id="map-demo">
       <Link to="/" className="back-link">← Back</Link>
       <h2>MapLibre demo</h2>
-      <p>An interactive vector map rendered with MapLibre GL — no API key needed.</p>
+      <p>An interactive vector map rendered with MapLibre GL -- no API key needed.</p>
       <div ref={containerRef} className="map-container" />
     </section>
   )
