@@ -17,3 +17,8 @@ typing_extensions==4.15.0
 uvicorn==0.48.0
 watchfiles==1.2.0
 websockets==16.0
+
+# Test dependencies (no test suite existed before the airport_capacity feature).
+# httpx is required by fastapi.testclient.TestClient.
+pytest==8.3.4
+httpx==0.28.1
