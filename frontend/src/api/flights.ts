@@ -5,6 +5,8 @@ import { apiFetch } from './client'
 import type {
   LandingsRequest,
   LandingsResponse,
+  RecommendRequest,
+  RecommendResponse,
   RoutesSnapshot,
   ScenariosResponse,
   SectorPopulationResponse,
@@ -41,6 +43,15 @@ export function fetchSnapshot(scenarioId: string): Promise<RoutesSnapshot> {
 // LOW band since landings happen at ground level.
 export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollection> {
   return apiFetch<GeoJSON.FeatureCollection>(`/sectors/geojson?band=${encodeURIComponent(band)}`)
+}
+
+// Reroute recommendation: given a target airport + arrival time, scores all
+// NYC core airports by current rolling-hour demand and returns the best alternative.
+export function fetchRecommendation(req: RecommendRequest): Promise<RecommendResponse> {
+  return apiFetch<RecommendResponse>('/recommend', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
 }
 
 // Live per-sector occupancy at a given time for one altitude band

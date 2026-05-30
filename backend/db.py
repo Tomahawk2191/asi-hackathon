@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS flight_frequency (
     flight_count INTEGER NOT NULL,
     PRIMARY KEY (day, direction, airport, bucket_start)
 );
-CREATE INDEX IF NOT EXISTS idx_flight_frequency_day_sector ON flight_frequency(day, sector);
+CREATE INDEX IF NOT EXISTS idx_arrival_day_sector ON flight_frequency(day, sector);
 
 CREATE TABLE IF NOT EXISTS airport_capacity (
     airport TEXT    PRIMARY KEY,  -- destination ICAO

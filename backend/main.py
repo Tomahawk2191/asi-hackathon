@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -724,214 +724,145 @@ def overload(
     return {"day": day, "airport": airport, "airports": results}
 
 
-# --- airport busyness ("popularity") + sister airports ----------------------
+# --- reroute recommendation --------------------------------------------------
+
+# Airports considered as reroute candidates when none specified.
+NYC_CORE = ["KJFK", "KLGA", "KEWR"]
+DEFAULT_RECOMMEND_DAY = "2025-12-25"
 
 
-class BusynessAirport(BaseModel):
+def _snap_to_5min(t: datetime) -> datetime:
+    return t.replace(minute=(t.minute // 5) * 5, second=0, microsecond=0)
+
+
+def _rolling_count_at(buckets: list[dict], t: datetime) -> int:
+    """Sum arrivals across the 12 five-minute buckets ending at t (matching rolling_hour_overload)."""
+    t_snap = _snap_to_5min(t)
+    # 12 buckets × 5 min = 60 min; window is [t-55min, t] inclusive (12 steps).
+    window_start = t_snap - timedelta(minutes=55)
+    return sum(
+        int(b["flight_count"])
+        for b in buckets
+        if window_start <= datetime.fromisoformat(b["bucket_start"]) <= t_snap
+    )
+
+
+class RecommendRequest(BaseModel):
+    airport: str = Field(description="Desired destination airport ICAO, e.g. 'KJFK'.")
+    time: str = Field(description="Desired arrival time, ISO-8601 UTC.")
+    day: Optional[str] = Field(
+        default=None,
+        description="Day to analyze, YYYY-MM-DD. Defaults to 2025-12-25.",
+    )
+    alternatives: Optional[list[str]] = Field(
+        default=None,
+        description="Alternative airport ICAOs to score. Defaults to all NYC core airports.",
+    )
+
+
+class AirportLoad(BaseModel):
     airport: str
-    inbound: int = Field(description="Arrivals in the window centered on `time`.")
-    outbound: int = Field(description="Departures in the window centered on `time`.")
-    movements: int = Field(description="inbound + outbound.")
-    capacity: Optional[int] = Field(
-        description="VMC AAR (arrivals/hr); null for relievers with no FAA profile."
-    )
-    has_capacity: bool = Field(
-        description="Whether the airport has a true FAA capacity profile (AAR)."
-    )
-    score: int = Field(
-        description="Busyness 0-100+ (~100 = a core airport at practical capacity)."
-    )
+    rolling_arrivals: int
+    aar: int
+    utilization: float
+    available_capacity: int
+    is_overloaded: bool
 
 
-class BusynessResponse(BaseModel):
-    scenario: str
-    time: str = Field(description="Resolved center time of the window (ISO-8601 UTC).")
-    window_minutes: int = Field(description="Width of the window the counts cover.")
-    airports: list[BusynessAirport] = Field(
-        description="All NYC-metro airports, busiest first."
+class RecommendResponse(BaseModel):
+    requested_airport: str
+    requested_time: str
+    day: str
+    target: AirportLoad
+    alternatives: list[AirportLoad]
+    recommendation: Optional[str] = Field(
+        description="ICAO of the best alternative airport, or null if target has capacity."
     )
 
 
-class SisterAirport(BusynessAirport):
-    distance_nm: Optional[float] = Field(
-        description="Great-circle distance from the primary airport, nm "
-        "(null if the airport has no flights in the scenario to locate it)."
-    )
-    less_busy_by: int = Field(
-        description="primary.score - this airport's score (>0: less busy than primary)."
-    )
+@app.post("/recommend", response_model=RecommendResponse)
+def recommend(req: RecommendRequest):
+    """Reroute recommendation for a desired arrival.
 
-
-class SisterAirportsResponse(BaseModel):
-    scenario: str
-    time: str
-    window_minutes: int
-    radius_nm: Optional[float] = Field(
-        description="Proximity filter applied; null = whole NYC metro."
-    )
-    primary: BusynessAirport = Field(description="The airport being relieved.")
-    sisters: list[SisterAirport] = Field(
-        description="Nearby airports less busy than the primary, least busy first."
-    )
-
-
-def _resolve_scenario_time(
-    scenario: Optional[str], time: Optional[str]
-) -> tuple[str, datetime]:
-    """Resolve a (scenario, center-time) pair, applying defaults and validation.
-
-    Scenario defaults to the earliest available; time defaults to the snapshot's
-    window midpoint. Raises HTTPException(400/404) for missing/unknown scenarios
-    or an unparseable time.
+    Given a target airport and desired arrival time, computes rolling-60-minute
+    arrival demand for the target and all alternatives, then ranks alternatives
+    by available capacity (AAR minus current demand). Returns the best
+    alternative if the target is at or over capacity.
     """
-    scenario = scenario or default_scenario()
-    if scenario is None:
-        raise HTTPException(
-            status_code=400,
-            detail="No scenario given and none found in the data bundle.",
-        )
-    available = list_scenarios()
-    if scenario not in available:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Unknown scenario {scenario!r}.", "available": available},
-        )
-    snapshot = get_snapshot(scenario)
-    if time is None:
-        when = snapshot.window_start + (snapshot.window_end - snapshot.window_start) / 2
-    else:
-        when = _parse_time(time)
-    return scenario, when
+    airport = req.airport.upper()
+    day = req.day or DEFAULT_RECOMMEND_DAY
+    t = _parse_time(req.time)
 
+    alts = [a.upper() for a in req.alternatives] if req.alternatives else NYC_CORE
+    all_airports = list({airport} | set(alts))
 
-def compute_busyness(
-    scenario: Optional[str], time: Optional[str], window_minutes: int
-) -> BusynessResponse:
-    """Busyness for every NYC-metro airport at a time, computed live from data/."""
-    scenario, when = _resolve_scenario_time(scenario, time)
-    rows = busyness.airport_busyness(get_snapshot(scenario), when, window_minutes)
-    return BusynessResponse(
-        scenario=scenario,
-        time=when.isoformat(),
-        window_minutes=window_minutes,
-        airports=[BusynessAirport(**row) for row in rows],
-    )
+    conn = db.connect(DB_PATH)
+    try:
+        _ensure_capacity_seeded(conn)
+        aar_by_airport = {r["airport"]: r["aar"] for r in db.read_capacity(conn)}
+        demand_rows = db.read_day(conn, day, "arrival")
+    finally:
+        conn.close()
 
-
-def compute_sister_airports(
-    scenario: Optional[str],
-    airport: str,
-    time: Optional[str],
-    radius_nm: Optional[float],
-    window_minutes: int,
-) -> SisterAirportsResponse:
-    """Nearby NYC-metro airports less busy than ``airport`` at the given time.
-
-    Sisters are the metro airports (other than the primary) whose busyness score
-    is strictly lower, optionally within ``radius_nm``, sorted least-busy first
-    (nearest first to break ties). Distances come from the per-scenario airport
-    coordinates derived from route endpoints.
-    """
-    scenario, when = _resolve_scenario_time(scenario, time)
-    icao = airport.upper()
-    snapshot = get_snapshot(scenario)
-    rows = busyness.airport_busyness(snapshot, when, window_minutes)
-    by_icao = {row["airport"]: row for row in rows}
-    if icao not in by_icao:
+    if not demand_rows:
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"{icao!r} is not a NYC-metro airport in this scenario.",
-                "available": sorted(by_icao),
+                "error": f"No stored arrival demand for day {day!r}.",
+                "hint": "Seed this day first (e.g. via seed_bts.py for 2025-12-25).",
             },
         )
 
-    coords = get_airport_coords(scenario)
-    primary_row = by_icao[icao]
-    primary_score = primary_row["score"]
-    primary_coord = coords.get(icao)
+    # Group demand by airport.
+    demand_by_airport: dict[str, list[dict]] = {}
+    for row in demand_rows:
+        demand_by_airport.setdefault(row["airport"], []).append(row)
 
-    sisters: list[SisterAirport] = []
-    for row in rows:
-        other = row["airport"]
-        if other == icao or row["score"] >= primary_score:
-            continue
-        distance = None
-        if primary_coord is not None and other in coords:
-            distance = round(airports.great_circle_nm(primary_coord, coords[other]), 1)
-        # A radius filter can only keep airports we can actually locate.
-        if radius_nm is not None and (distance is None or distance > radius_nm):
-            continue
-        sisters.append(
-            SisterAirport(
-                **row,
-                distance_nm=distance,
-                less_busy_by=primary_score - row["score"],
-            )
+    def airport_load(icao: str) -> AirportLoad:
+        aar = aar_by_airport.get(icao, 0)
+        count = _rolling_count_at(demand_by_airport.get(icao, []), t)
+        util = round(count / aar, 3) if aar else 0.0
+        return AirportLoad(
+            airport=icao,
+            rolling_arrivals=count,
+            aar=aar,
+            utilization=util,
+            available_capacity=aar - count,
+            is_overloaded=count > aar,
         )
 
-    sisters.sort(
-        key=lambda s: (
-            s.score,
-            s.distance_nm if s.distance_nm is not None else float("inf"),
-            s.airport,
-        )
-    )
-    return SisterAirportsResponse(
-        scenario=scenario,
-        time=when.isoformat(),
-        window_minutes=window_minutes,
-        radius_nm=radius_nm,
-        primary=BusynessAirport(**primary_row),
-        sisters=sisters,
+    target_load = airport_load(airport)
+    alt_loads = sorted(
+        [airport_load(a) for a in alts if a != airport],
+        key=lambda x: (-x.available_capacity, x.airport),
     )
 
+    # Recommend the alternative with the most headroom, but only surface a
+    # redirect if the target is overloaded or within 5% of capacity.
+    recommend_icao: Optional[str] = None
+    if target_load.is_overloaded or target_load.utilization >= 0.95:
+        best = next((a for a in alt_loads if not a.is_overloaded), None)
+        if best:
+            recommend_icao = best.airport
 
-@app.get("/busyness", response_model=BusynessResponse)
-def busyness_endpoint(
-    scenario: Optional[str] = Query(
-        default=None, description="Scenario id (YYYY-MM-DD); defaults to earliest."
-    ),
-    time: Optional[str] = Query(
-        default=None,
-        description="ISO-8601 center time, e.g. 2025-08-21T19:15:00Z; "
-        "defaults to the scenario's window midpoint.",
-    ),
-    window_minutes: int = Query(
-        default=60, ge=5, le=240, description="Window width centered on `time`."
-    ),
+    return RecommendResponse(
+        requested_airport=airport,
+        requested_time=t.isoformat(),
+        day=day,
+        target=target_load,
+        alternatives=alt_loads,
+        recommendation=recommend_icao,
+    )
+
+
+@app.get("/recommend")
+def recommend_get(
+    airport: str = Query(description="Target airport ICAO, e.g. KJFK."),
+    time: str = Query(description="Desired arrival time, ISO-8601 UTC."),
+    day: Optional[str] = Query(default=None),
 ):
-    """Busyness ("popularity") score per NYC-metro airport at a given time.
-
-    Computed live from the scenario snapshot in data/ (no refresh needed): for a
-    window centered on `time`, blends inbound (arrivals), outbound (departures),
-    and the inbound-capacity reference (VMC AAR) into a rough 0-100+ score.
-    """
-    return compute_busyness(scenario, time, window_minutes)
-
-
-@app.get("/sister-airports", response_model=SisterAirportsResponse)
-def sister_airports_endpoint(
-    airport: str = Query(description="Primary airport ICAO to relieve, e.g. KLGA."),
-    scenario: Optional[str] = Query(
-        default=None, description="Scenario id (YYYY-MM-DD); defaults to earliest."
-    ),
-    time: Optional[str] = Query(
-        default=None, description="ISO-8601 center time; defaults to window midpoint."
-    ),
-    radius_nm: Optional[float] = Query(
-        default=None,
-        gt=0,
-        description="Optional proximity filter (nm); omit to consider the whole metro.",
-    ),
-    window_minutes: int = Query(default=60, ge=5, le=240),
-):
-    """Nearby airports that are less busy than `airport` at the given time.
-
-    Ranks the other NYC-metro airports by busyness and returns those scoring
-    lower than the primary (offload/diversion candidates), least busy first.
-    """
-    return compute_sister_airports(scenario, airport, time, radius_nm, window_minutes)
+    """Convenience GET form of POST /recommend."""
+    return recommend(RecommendRequest(airport=airport, time=time, day=day))
 
 
 if __name__ == "__main__":
