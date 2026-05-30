@@ -13,20 +13,19 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+import db
+import nyc
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-
-import db
-import nyc
 from flights import RoutesSnapshot
 from loaders import load_routes
+from pydantic import BaseModel, Field
 from sectors import Sector, flights_landing_per_airport, load_sectors
 
 ROOT = Path(__file__).resolve().parent.parent
 SECTORS_PATH = ROOT / "data" / "sectors.geojson"
-BUNDLE = ROOT / "hackathon_data_bundle"
+BUNDLE = ROOT / "data" / "nyc_dataset"
 DB_PATH = Path(os.environ.get("ARRIVALS_DB") or db.DEFAULT_DB_PATH)
 
 app = FastAPI(title="ASI Hackathon API")
@@ -49,15 +48,40 @@ def get_sectors() -> dict[str, Sector]:
     return {s.name: s for s in load_sectors(SECTORS_PATH)}
 
 
-def list_scenarios() -> list[str]:
-    """Names of the scenario snapshot directories in the data bundle."""
+def _scenario_name(path: Path) -> str:
+    """Scenario id for a snapshot file: the ``<date>`` in ``nyc_<date>.json``.
+
+    Strips the ``nyc_`` prefix and the ``.json`` / ``.json.gz`` suffix, so
+    ``nyc_2025-08-21.json`` -> ``2025-08-21``.
+    """
+    name = path.name
+    for suffix in (".json.gz", ".json"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name[len("nyc_"):] if name.startswith("nyc_") else name
+
+
+def _scenario_files() -> dict[str, Path]:
+    """Map scenario id -> snapshot file for every ``nyc_<date>`` file present.
+
+    Recognizes both plain ``.json`` and gzipped ``.json.gz`` snapshots.
+    """
     if not BUNDLE.exists():
-        return []
-    return sorted(
-        p.name
-        for p in BUNDLE.iterdir()
-        if p.is_dir() and p.name.startswith("asked_at_")
-    )
+        return {}
+    files: dict[str, Path] = {}
+    for path in BUNDLE.iterdir():
+        name = path.name
+        if path.is_file() and name.startswith("nyc_") and (
+            name.endswith(".json") or name.endswith(".json.gz")
+        ):
+            files[_scenario_name(path)] = path
+    return files
+
+
+def list_scenarios() -> list[str]:
+    """Available scenario ids -- the ``<date>`` of each ``nyc_<date>`` snapshot."""
+    return sorted(_scenario_files())
 
 
 def default_scenario() -> Optional[str]:
@@ -66,13 +90,11 @@ def default_scenario() -> Optional[str]:
 
 
 def _routes_path(scenario: str) -> Path:
-    """Locate a scenario's routes file (plain or gzipped)."""
-    base = BUNDLE / scenario
-    for name in ("routes.json", "routes.json.gz"):
-        candidate = base / name
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"No routes file found for scenario {scenario!r}")
+    """Locate a scenario's snapshot file (plain or gzipped)."""
+    files = _scenario_files()
+    if scenario not in files:
+        raise FileNotFoundError(f"No routes file found for scenario {scenario!r}")
+    return files[scenario]
 
 
 @lru_cache(maxsize=None)
@@ -91,7 +113,7 @@ class LandingsRequest(BaseModel):
     )
     scenario: Optional[str] = Field(
         default=None,
-        description="Scenario directory name (see GET /scenarios). "
+        description="Scenario id, a YYYY-MM-DD date (see GET /scenarios). "
         "Defaults to the earliest available scenario.",
     )
 
@@ -110,7 +132,9 @@ class LandingsResponse(BaseModel):
 # --- core --------------------------------------------------------------------
 
 
-def compute_landings(sector_names: list[str], scenario: Optional[str]) -> LandingsResponse:
+def compute_landings(
+    sector_names: list[str], scenario: Optional[str]
+) -> LandingsResponse:
     """Resolve inputs, run the helper, and shape the response.
 
     Raises HTTPException(400/404) for empty/unknown sectors or scenarios.
@@ -231,7 +255,11 @@ def _refresh(day: Optional[str]) -> dict:
             rows = nyc.nyc_arrival_frequency(load_routes(nyc.day_file(d)), sector_list)
             written = db.write_day(conn, d, rows)
             refreshed.append(
-                {"day": d, "rows": written, "flights": sum(r["flight_count"] for r in rows)}
+                {
+                    "day": d,
+                    "rows": written,
+                    "flights": sum(r["flight_count"] for r in rows),
+                }
             )
     finally:
         conn.close()
@@ -292,13 +320,17 @@ class AirportCapacity(BaseModel):
         description="Arrivals in the matched 5-minute window; 0 if none that "
         "window, null if the airport has no stored data."
     )
-    has_data: bool = Field(description="Whether any stored data exists for the airport.")
+    has_data: bool = Field(
+        description="Whether any stored data exists for the airport."
+    )
 
 
 class CapacityResponse(BaseModel):
     requested_time: str
     matched_time: str = Field(description="Closest stored 5-min bucket to the request.")
-    offset_seconds: int = Field(description="matched_time - requested_time, in seconds.")
+    offset_seconds: int = Field(
+        description="matched_time - requested_time, in seconds."
+    )
     day: str = Field(description="Day the matched bucket belongs to.")
     airports: list[AirportCapacity]
 
@@ -314,7 +346,9 @@ def _parse_time(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def compute_capacity(airports: list[str], time: str, day: Optional[str]) -> CapacityResponse:
+def compute_capacity(
+    airports: list[str], time: str, day: Optional[str]
+) -> CapacityResponse:
     """Historic arrival count per airport at the stored time closest to ``time``."""
     airports = [a.upper() for a in airports]
     if not airports:
@@ -337,7 +371,9 @@ def compute_capacity(airports: list[str], time: str, day: Optional[str]) -> Capa
         )
 
     # Closest stored 5-minute bucket to the requested time.
-    bucket_times = {r["bucket_start"]: datetime.fromisoformat(r["bucket_start"]) for r in rows}
+    bucket_times = {
+        r["bucket_start"]: datetime.fromisoformat(r["bucket_start"]) for r in rows
+    }
     matched = min(
         bucket_times, key=lambda b: abs((bucket_times[b] - requested).total_seconds())
     )
@@ -350,7 +386,9 @@ def compute_capacity(airports: list[str], time: str, day: Optional[str]) -> Capa
     for airport in airports:
         if airport not in have_data:
             per_airport.append(
-                AirportCapacity(airport=airport, sector=None, flight_count=None, has_data=False)
+                AirportCapacity(
+                    airport=airport, sector=None, flight_count=None, has_data=False
+                )
             )
         elif airport in at_matched:
             row = at_matched[airport]
