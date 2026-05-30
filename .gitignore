@@ -1,6 +1,39 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*credentials*.json
+
+# Local data
 hackathon_data_bundle
 .claude/settings.local.json
-venv/
+
+# Python / uv
 __pycache__/
 *.pyc
-.env
+*.pyo
+.venv/
+venv/
+.uv-cache/
+backend/.cache/
+backend/.pytest_cache/
+
+# Node / Vite
+node_modules/
+dist/
+build/
+.vite/
+
+# Local artefacts
+.logs/
+*.png.cache
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

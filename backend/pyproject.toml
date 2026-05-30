@@ -1,0 +1,20 @@
+[project]
+name = "asi-backend"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "cfgrib>=0.9.15.1",
+    "eccodes>=2.47.0",
+    "fastapi>=0.136.3",
+    "httpx>=0.28.1",
+    "numpy>=2.4.6",
+    "orjson>=3.11.9",
+    "pillow>=12.2.0",
+    "pyproj>=3.7.2",
+    "rtree>=1.4.1",
+    "scipy>=1.17.1",
+    "shapely>=2.1.2",
+    "uvicorn[standard]>=0.48.0",
+    "xarray>=2026.4.0",
+]
