@@ -1,8 +1,8 @@
-"""SQLite storage for NYC-metro arrival frequency.
+"""SQLite storage for NYC-metro flight frequency.
 
-One table, ``arrival_frequency``, holding per-(day, airport, 5-min bucket)
-arrival counts. Writes are idempotent per day: refreshing a day replaces that
-day's rows.
+One table, ``flight_frequency``, holding per-(day, direction, airport, 5-min
+bucket) counts, where ``direction`` is ``'arrival'`` or ``'departure'``. Writes
+are idempotent per (day, direction): refreshing replaces those rows.
 """
 
 from __future__ import annotations
@@ -17,16 +17,20 @@ PathLike = Union[str, Path]
 # Default DB lives next to the backend code; override with $ARRIVALS_DB.
 DEFAULT_DB_PATH = Path(os.environ.get("ARRIVALS_DB") or (Path(__file__).resolve().parent / "arrivals.db"))
 
+_COLUMNS = "day, direction, sector, airport, bucket_start, flight_count"
+
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS arrival_frequency (
+CREATE TABLE IF NOT EXISTS flight_frequency (
     day          TEXT    NOT NULL,  -- 'YYYY-MM-DD'
+    direction    TEXT    NOT NULL,  -- 'arrival' | 'departure'
     sector       TEXT,              -- LOW sector covering the airport, or NULL
-    airport      TEXT    NOT NULL,  -- destination ICAO
+    airport      TEXT    NOT NULL,  -- endpoint airport ICAO (origin or destination)
     bucket_start TEXT    NOT NULL,  -- ISO-8601 UTC, start of 5-minute window
     flight_count INTEGER NOT NULL,
-    PRIMARY KEY (day, airport, bucket_start)
+    PRIMARY KEY (day, direction, airport, bucket_start)
 );
-CREATE INDEX IF NOT EXISTS idx_arrival_day_sector ON arrival_frequency(day, sector);
+CREATE INDEX IF NOT EXISTS idx_flight_day_dir_sector
+    ON flight_frequency(day, direction, sector);
 """
 
 
@@ -38,20 +42,27 @@ def connect(db_path: PathLike = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def write_day(conn: sqlite3.Connection, day: str, rows: Iterable[dict]) -> int:
-    """Replace ``day``'s rows with ``rows``; returns the number written.
+def write_day(
+    conn: sqlite3.Connection,
+    day: str,
+    direction: str,
+    rows: Iterable[dict],
+) -> int:
+    """Replace ``(day, direction)``'s rows with ``rows``; returns the count.
 
     Each row needs keys: ``sector``, ``airport``, ``bucket_start``,
     ``flight_count``. Runs in a single transaction.
     """
     rows = list(rows)
     with conn:  # commit/rollback transaction
-        conn.execute("DELETE FROM arrival_frequency WHERE day = ?", (day,))
+        conn.execute(
+            "DELETE FROM flight_frequency WHERE day = ? AND direction = ?",
+            (day, direction),
+        )
         conn.executemany(
-            "INSERT INTO arrival_frequency "
-            "(day, sector, airport, bucket_start, flight_count) VALUES (?, ?, ?, ?, ?)",
+            f"INSERT INTO flight_frequency ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
             [
-                (day, r["sector"], r["airport"], r["bucket_start"], r["flight_count"])
+                (day, direction, r["sector"], r["airport"], r["bucket_start"], r["flight_count"])
                 for r in rows
             ],
         )
@@ -61,14 +72,12 @@ def write_day(conn: sqlite3.Connection, day: str, rows: Iterable[dict]) -> int:
 def read_day(
     conn: sqlite3.Connection,
     day: str,
+    direction: str,
     sector: Optional[str] = None,
 ) -> list[dict]:
-    """Read a day's rows, optionally filtered to one sector, time-ordered."""
-    query = (
-        "SELECT day, sector, airport, bucket_start, flight_count "
-        "FROM arrival_frequency WHERE day = ?"
-    )
-    params: list = [day]
+    """Read a (day, direction)'s rows, optionally one sector, time-ordered."""
+    query = f"SELECT {_COLUMNS} FROM flight_frequency WHERE day = ? AND direction = ?"
+    params: list = [day, direction]
     if sector is not None:
         query += " AND sector = ?"
         params.append(sector)
@@ -78,23 +87,25 @@ def read_day(
 
 def read_airport_rows(
     conn: sqlite3.Connection,
+    direction: str,
     airports: Iterable[str],
     day: Optional[str] = None,
 ) -> list[dict]:
-    """All stored rows for a set of airports (optionally restricted to a day).
+    """All stored rows for a set of airports in one direction.
 
-    Returns an empty list if ``airports`` is empty. The closest-time selection
-    is done by the caller so timestamp parsing stays in Python.
+    Optionally restricted to a day. Returns an empty list if ``airports`` is
+    empty. The closest-time selection is done by the caller so timestamp
+    parsing stays in Python.
     """
     airports = list(airports)
     if not airports:
         return []
     placeholders = ",".join("?" for _ in airports)
     query = (
-        "SELECT day, sector, airport, bucket_start, flight_count "
-        f"FROM arrival_frequency WHERE airport IN ({placeholders})"
+        f"SELECT {_COLUMNS} FROM flight_frequency "
+        f"WHERE direction = ? AND airport IN ({placeholders})"
     )
-    params: list = list(airports)
+    params: list = [direction, *airports]
     if day is not None:
         query += " AND day = ?"
         params.append(day)
