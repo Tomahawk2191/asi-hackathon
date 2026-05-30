@@ -40,17 +40,18 @@ export default function LoadBoard({ scenario, selection, onSelect }: Props) {
     <aside className="loadboard panel">
       <div className="panel-head">
         <span>AIRPORT LOAD</span>
-        <span className="panel-head-sub">ARR / 60MIN · CAP</span>
+        <span className="panel-head-sub">BUSYNESS · SCORE</span>
       </div>
       <div className="load-rows">
         {loads.map((l) => {
           const ap = scenario.airportByIcao.get(l.icao)!
-          const pct = Math.min(1, l.ratio)
+          const saturated = l.score >= 100
+          const pct = Math.min(1, l.score / 100)
           return (
             <button
               key={l.icao}
               className="load-row"
-              data-over={l.over}
+              data-over={saturated}
               data-sel={l.icao === selIcao}
               data-core={ap.isCore}
               onClick={() => onSelect({ kind: 'airport', icao: l.icao })}
@@ -58,15 +59,15 @@ export default function LoadBoard({ scenario, selection, onSelect }: Props) {
               <div className="load-row-top">
                 <span className="load-icao">{l.icao}</span>
                 <span className="load-count">
-                  {l.rolling}
-                  <span className="load-cap">/{l.capacity}</span>
+                  {l.score}
+                  <span className="load-cap">/100</span>
                 </span>
               </div>
               <div className="load-bar">
                 <div
                   className="load-bar-fill"
                   style={{ width: `${pct * 100}%` }}
-                  data-over={l.over}
+                  data-over={saturated}
                 />
                 <div className="load-bar-cap" />
               </div>

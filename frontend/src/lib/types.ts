@@ -75,9 +75,14 @@ export interface Airport {
   isCore: boolean
   // arrivals bucketed into 5-min windows across the day window
   arrivalBuckets: Int32Array
+  // departures (origin + take-off time) bucketed the same way; with arrivals
+  // these give the movements the busyness score is built from
+  departureBuckets: Int32Array
   arrivalsTotal: number
   // nominal hourly arrival capacity used for the load gauge
   capacity: number
+  // VMC arrival acceptance rate (arrivals/hr); score = 100 * movements / (2 * aar)
+  aar: number
 }
 
 export interface SectorFeature {
