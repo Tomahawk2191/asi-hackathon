@@ -43,11 +43,6 @@ export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollect
   return apiFetch<GeoJSON.FeatureCollection>(`/sectors/geojson?band=${encodeURIComponent(band)}`)
 }
 
-// Convective weather cells (boundary polygons) for a scenario (GET /weather).
-export function fetchWeather(scenario: string): Promise<GeoJSON.FeatureCollection> {
-  return apiFetch<GeoJSON.FeatureCollection>(`/weather?scenario=${encodeURIComponent(scenario)}`)
-}
-
 // Live per-sector occupancy at a given time for one altitude band
 // (GET /sectors/population).
 export function fetchSectorPopulation(

@@ -485,10 +485,6 @@ button {
   flex-direction: column;
   gap: 6px;
 }
-.mapctl-sep {
-  width: 1px;
-  background: var(--line);
-}
 .mapctl-label {
   font-size: 8.5px;
   letter-spacing: 0.2em;
@@ -521,55 +517,6 @@ button {
   font-size: 9.5px;
   letter-spacing: 0.06em;
   color: var(--txt-dim);
-}
-.mapctl-legend.wx {
-  gap: 5px;
-}
-.wx-sw {
-  width: 9px;
-  height: 9px;
-  border: 1px solid;
-  margin-left: 4px;
-}
-.wx-sw.light {
-  border-color: #5fd0e0;
-  background: rgba(95, 208, 224, 0.18);
-}
-.wx-sw.mod {
-  border-color: var(--accent);
-  background: rgba(255, 176, 0, 0.18);
-}
-.wx-sw.sev {
-  border-color: var(--alert);
-  background: rgba(255, 82, 51, 0.22);
-}
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--txt-dim);
-}
-.toggle:hover {
-  color: var(--txt);
-}
-.toggle-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--txt-faint);
-}
-.toggle[data-on='true'] {
-  color: var(--txt);
-  border-color: rgba(255, 176, 0, 0.5);
-}
-.toggle[data-on='true'] .toggle-dot {
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
 }
 
 /* ---------- timeline ---------- */
