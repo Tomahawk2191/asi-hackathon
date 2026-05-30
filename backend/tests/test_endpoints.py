@@ -21,7 +21,7 @@ def _seed_demand(db_path, day, airport, counts, start="12:00"):
     ]
     conn = db.connect(db_path)
     try:
-        db.write_day(conn, day, rows)
+        db.write_day(conn, day, "arrival", rows)
     finally:
         conn.close()
 

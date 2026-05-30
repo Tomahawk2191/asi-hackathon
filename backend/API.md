@@ -19,6 +19,8 @@ Interactive docs (Swagger): `http://localhost:8000/docs`.
 | POST   | `/capacity_rates/refresh` | (Re)seed the curated VMC AAR table. Idempotent.       |
 | GET    | `/capacity_rates/refresh` | Convenience form of `POST /capacity_rates/refresh`.   |
 | GET    | `/overload`  | Rolling-hour arrival demand vs the AAR, per airport, for a day.  |
+| GET    | `/busyness`  | Per-airport "busyness" score at a time (live from the snapshots).  |
+| GET    | `/sister-airports` | Nearby airports less busy than a given airport at a time.    |
 
 ---
 
@@ -326,6 +328,88 @@ hourly AAR, flagging the windows where demand exceeds capacity.
 
 ```bash
 curl -s "http://localhost:8000/overload?day=2025-08-21&airport=KLGA"
+```
+
+### `GET /busyness`
+
+A rough per-airport **busyness ("popularity") score** at a moment in time,
+computed **live from the scenario snapshot** in `data/` — no `/refresh` needed.
+For a window centered on `time`, it blends **inbound** (arrivals), **outbound**
+(departures), and the **inbound-capacity** reference (VMC AAR) into one estimate.
+
+> Score model (a deliberate estimate, not an exact rate):
+> `movements = inbound + outbound`, `score = round(100 * movements / (2 * AAR))`.
+> `~100` ≈ a core airport at practical capacity (it can exceed 100). Relievers have
+> no FAA AAR, so they're scaled on the busiest-core reference (52) and report
+> `capacity: null`. All raw parts are returned, so you can re-derive your own score.
+
+| Query            | Required | Description                                                       |
+| ---------------- | -------- | ----------------------------------------------------------------- |
+| `scenario`       | no       | Scenario id (`YYYY-MM-DD`); defaults to the earliest.             |
+| `time`           | no       | ISO-8601 center time; defaults to the scenario's window midpoint. |
+| `window_minutes` | no       | Window width centered on `time` (5–240, default 60).             |
+
+**Response** — `airports` sorted busiest → least busy.
+
+```json
+{
+  "scenario": "2025-08-21",
+  "time": "2025-08-21T19:15:00+00:00",
+  "window_minutes": 60,
+  "airports": [
+    { "airport": "KLGA", "inbound": 34, "outbound": 41, "movements": 75, "capacity": 40, "has_capacity": true, "score": 94 },
+    { "airport": "KEWR", "inbound": 17, "outbound": 33, "movements": 50, "capacity": 52, "has_capacity": true, "score": 48 },
+    { "airport": "KTEB", "inbound": 16, "outbound": 15, "movements": 31, "capacity": null, "has_capacity": false, "score": 30 },
+    "..."
+  ]
+}
+```
+
+```bash
+curl -s "http://localhost:8000/busyness?scenario=2025-08-21&time=2025-08-21T19:15:00Z"
+```
+
+### `GET /sister-airports`
+
+Nearby airports that are **less busy** than a given airport at a time — offload /
+diversion candidates. Scores every NYC-metro airport (same model as `/busyness`)
+and returns those scoring below the primary, **least busy first** (so the most
+spare capacity is first; nearest breaks ties). Distances are great-circle nm from
+airport coordinates derived from the snapshot's route endpoints.
+
+| Query            | Required | Description                                                         |
+| ---------------- | -------- | ------------------------------------------------------------------- |
+| `airport`        | yes      | Primary airport ICAO to relieve, e.g. `KLGA`.                       |
+| `scenario`       | no       | Scenario id (`YYYY-MM-DD`); defaults to the earliest.               |
+| `time`           | no       | ISO-8601 center time; defaults to the window midpoint.              |
+| `radius_nm`      | no       | Proximity filter in nm (`>0`); omit to consider the whole metro.    |
+| `window_minutes` | no       | 5–240, default 60.                                                  |
+
+**Response** — `less_busy_by` = `primary.score − airport.score`. `distance_nm` is
+`null` for an airport with no flights in the scenario (can't be located); those are
+excluded when `radius_nm` is set.
+
+```json
+{
+  "scenario": "2025-08-21",
+  "time": "2025-08-21T19:15:00+00:00",
+  "window_minutes": 60,
+  "radius_nm": null,
+  "primary": { "airport": "KLGA", "inbound": 34, "outbound": 41, "movements": 75, "capacity": 40, "has_capacity": true, "score": 94 },
+  "sisters": [
+    { "airport": "KBDR", "inbound": 0, "outbound": 0, "movements": 0, "capacity": null, "has_capacity": false, "score": 0, "distance_nm": 41.0, "less_busy_by": 94 },
+    { "airport": "KLDJ", "inbound": 0, "outbound": 0, "movements": 0, "capacity": null, "has_capacity": false, "score": 0, "distance_nm": null, "less_busy_by": 94 },
+    "...",
+    { "airport": "KTEB", "inbound": 16, "outbound": 15, "movements": 31, "capacity": null, "has_capacity": false, "score": 30, "distance_nm": 9.6, "less_busy_by": 64 }
+  ]
+}
+```
+
+```bash
+# whole metro, least busy first
+curl -s "http://localhost:8000/sister-airports?airport=KLGA&scenario=2025-08-21&time=2025-08-21T19:15:00Z"
+# only candidates within 25 nm
+curl -s "http://localhost:8000/sister-airports?airport=KLGA&time=2025-08-21T19:15:00Z&radius_nm=25"
 ```
 
 ---

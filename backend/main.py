@@ -14,6 +14,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+import airports
+import busyness
 import capacity
 import db
 import nyc
@@ -106,6 +108,12 @@ def _routes_path(scenario: str) -> Path:
 def get_snapshot(scenario: str) -> RoutesSnapshot:
     """Load and cache a scenario's routes snapshot."""
     return load_routes(_routes_path(scenario))
+
+
+@lru_cache(maxsize=None)
+def get_airport_coords(scenario: str) -> dict[str, tuple[float, float]]:
+    """Airport ICAO -> (lon, lat) for a scenario, derived from route endpoints."""
+    return airports.airport_coords(get_snapshot(scenario))
 
 
 # --- request / response models ----------------------------------------------

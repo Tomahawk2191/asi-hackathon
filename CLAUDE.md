@@ -10,7 +10,7 @@ grouped by arrival airport.
 | Path                      | What it is                                                              |
 | ------------------------- | ----------------------------------------------------------------------- |
 | `backend/`                | FastAPI service (Python 3.8+, Pydantic v2). The landing-count API.      |
-| `frontend/asi-hackathon/` | React 19 + Vite + MapLibre GL SPA. Currently the Vite starter + a map demo. |
+| `frontend/`               | React 19 + Vite + MapLibre GL SPA (map, load board, timeline). |
 | `data/`                   | Committed datasets: `sectors.geojson` + `nyc_dataset/`.                 |
 
 ## Running
@@ -25,7 +25,7 @@ uvicorn main:app --reload
 
 **Frontend** (Vite dev server on `http://localhost:5173` — uses **bun**, see `bun.lock`):
 ```bash
-cd frontend/asi-hackathon
+cd frontend
 bun install
 bun run dev      # dev server
 bun run build    # tsc -b && vite build
