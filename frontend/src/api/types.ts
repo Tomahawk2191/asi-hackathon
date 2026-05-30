@@ -39,6 +39,24 @@ export interface LandingsResponse {
   per_airport: Record<string, number>  // ICAO → landing count, e.g. { KJFK: 209, KLGA: 264 }
 }
 
+// /sectors/population -- live sector occupancy at a moment, by altitude band
+
+export interface SectorPopRow {
+  name: string
+  count: number       // flights inside the sector right now
+  capacity: number
+  ratio: number       // count / capacity (>1 = over capacity)
+}
+
+export interface SectorPopulationResponse {
+  scenario: string
+  time: string
+  band: 'LOW' | 'HIGH'
+  total: number
+  occupied: number
+  sectors: SectorPopRow[]  // busiest first
+}
+
 // /scenarios/{id}/routes (planned -- endpoint not yet live)
 
 // A single planned flight from the hackathon data bundle.

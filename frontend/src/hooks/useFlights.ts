@@ -2,12 +2,13 @@
 // Each hook returns { data, isLoading, isError, error } from TanStack Query.
 // Results are cached -- switching between scenarios won't re-fetch data already loaded.
 
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchLandings,
   fetchScenarios,
   fetchSectors,
   fetchSectorGeoJson,
+  fetchSectorPopulation,
   fetchSnapshot,
 } from '../api/flights'
 import type { LandingsRequest } from '../api/types'
@@ -36,6 +37,22 @@ export function useSectorGeoJson(band = 'LOW') {
     queryKey: ['sectorGeoJson', band],
     queryFn: () => fetchSectorGeoJson(band),
     staleTime: Infinity,
+  })
+}
+
+// Live sector occupancy for a band at a given (bucket-aligned) time.
+// keepPreviousData so the choropleth doesn't flash between time buckets.
+export function useSectorPopulation(
+  scenarioId: string | null,
+  time: string | null,
+  band: 'LOW' | 'HIGH',
+) {
+  return useQuery({
+    queryKey: ['population', scenarioId, band, time],
+    queryFn: () => fetchSectorPopulation(scenarioId!, time!, band),
+    enabled: scenarioId !== null && time !== null,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
   })
 }
 

@@ -19,6 +19,7 @@ import busyness
 import capacity
 import db
 import nyc
+import population as population_mod
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -258,6 +259,68 @@ def sectors_geojson(band: Optional[str] = Query(default=None, description="LOW o
             if str(f.get("properties", {}).get("name", "")).startswith(prefix)
         ]
     return {"type": "FeatureCollection", "features": features}
+
+
+# --- sector population (live occupancy) -------------------------------------
+
+
+def _band_sectors(band: str) -> list[Sector]:
+    """Sectors in one altitude band: LOW = [0, 35000), HIGH = [35000, 60000)."""
+    is_low = band == "LOW"
+    return [
+        s for s in get_sectors().values()
+        if (s.altitude_from_ft < population_mod.BAND_CEIL_FT) == is_low
+    ]
+
+
+@app.get("/sectors/population")
+def sectors_population(
+    time: str = Query(description="ISO-8601 instant, e.g. 2025-08-21T18:03:00Z."),
+    scenario: Optional[str] = Query(default=None),
+    band: str = Query(default="LOW", description="Altitude band: LOW or HIGH."),
+):
+    """How many flights occupy each sector at ``time``, for one altitude band.
+
+    Horizontal position is interpolated along each flight's route; altitude is
+    modelled (climb/cruise/descent) to pick the band. Returns only occupied
+    sectors with their capacity, busiest first.
+    """
+    band = band.upper()
+    if band not in ("LOW", "HIGH"):
+        raise HTTPException(status_code=400, detail="band must be LOW or HIGH.")
+
+    scenario = scenario or default_scenario()
+    if scenario is None:
+        raise HTTPException(status_code=400, detail="No scenario available.")
+    available = list_scenarios()
+    if scenario not in available:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Unknown scenario {scenario!r}.", "available": available},
+        )
+
+    when = _parse_time(time)
+    band_sectors = _band_sectors(band)
+    counts = population_mod.sector_population(get_snapshot(scenario), band_sectors, when, band)
+
+    index = get_sectors()
+    rows = [
+        {
+            "name": name,
+            "count": count,
+            "capacity": index[name].capacity,
+            "ratio": round(count / index[name].capacity, 3) if index[name].capacity else 0.0,
+        }
+        for name, count in counts.most_common()
+    ]
+    return {
+        "scenario": scenario,
+        "time": when.isoformat(),
+        "band": band,
+        "total": sum(counts.values()),
+        "occupied": len(rows),
+        "sectors": rows,
+    }
 
 
 @app.post("/landings", response_model=LandingsResponse)
