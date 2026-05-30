@@ -7,6 +7,7 @@ arrival airport.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import db
+import nyc
 from flights import RoutesSnapshot
 from loaders import load_routes
 from sectors import Sector, flights_landing_per_airport, load_sectors
@@ -23,6 +26,7 @@ from sectors import Sector, flights_landing_per_airport, load_sectors
 ROOT = Path(__file__).resolve().parent.parent
 SECTORS_PATH = ROOT / "data" / "sectors.geojson"
 BUNDLE = ROOT / "hackathon_data_bundle"
+DB_PATH = Path(os.environ.get("ARRIVALS_DB") or db.DEFAULT_DB_PATH)
 
 app = FastAPI(title="ASI Hackathon API")
 
@@ -193,6 +197,77 @@ def landings_get(
 ):
     """Convenience GET form of POST /landings for quick manual testing."""
     return compute_landings(sectors, scenario)
+
+
+# --- NYC arrival-frequency refresh ------------------------------------------
+
+
+class RefreshRequest(BaseModel):
+    day: Optional[str] = Field(
+        default=None,
+        description="Day to refresh as YYYY-MM-DD (see GET /scenarios or the "
+        "nyc_dataset). Omit to refresh every available NYC day.",
+    )
+
+
+def _refresh(day: Optional[str]) -> dict:
+    """Compute NYC arrival frequency from local files and write it to SQLite."""
+    available = nyc.available_days()
+    if not available:
+        raise HTTPException(status_code=500, detail="No NYC dataset files found.")
+    if day is not None and day not in available:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Unknown day {day!r}.", "available": available},
+        )
+    days = [day] if day is not None else available
+
+    sector_list = list(get_sectors().values())
+    conn = db.connect(DB_PATH)
+    try:
+        refreshed = []
+        for d in days:
+            rows = nyc.nyc_arrival_frequency(load_routes(nyc.day_file(d)), sector_list)
+            written = db.write_day(conn, d, rows)
+            refreshed.append(
+                {"day": d, "rows": written, "flights": sum(r["flight_count"] for r in rows)}
+            )
+    finally:
+        conn.close()
+    return {
+        "db_path": str(DB_PATH),
+        "refreshed": refreshed,
+        "total_flights": sum(r["flights"] for r in refreshed),
+    }
+
+
+@app.post("/refresh")
+def refresh(req: RefreshRequest):
+    """Build the 5-minute NYC arrival-frequency table for a day (or all days).
+
+    Reads only local bundle files and writes the result to the SQLite DB.
+    """
+    return _refresh(req.day)
+
+
+@app.get("/refresh")
+def refresh_get(day: Optional[str] = Query(default=None)):
+    """Convenience GET form of POST /refresh."""
+    return _refresh(day)
+
+
+@app.get("/arrivals")
+def arrivals(
+    day: str = Query(description="Day to read, YYYY-MM-DD (must be refreshed first)."),
+    sector: Optional[str] = Query(default=None, description="Optional sector filter."),
+):
+    """Read back stored arrival frequency for a day (optionally one sector)."""
+    conn = db.connect(DB_PATH)
+    try:
+        rows = db.read_day(conn, day, sector)
+    finally:
+        conn.close()
+    return {"day": day, "sector": sector, "count": len(rows), "rows": rows}
 
 
 if __name__ == "__main__":
