@@ -5,6 +5,7 @@ import LoadBoard from './components/LoadBoard'
 import Timeline from './components/Timeline'
 import SelectionPanel from './components/SelectionPanel'
 import MapControls from './components/MapControls'
+import RerouteAdvisor from './components/RerouteAdvisor'
 import {
   useScenarios,
   useSnapshot,
@@ -131,6 +132,7 @@ export default function Console() {
               selection={selection}
               onSelect={setSelection}
             />
+            <RerouteAdvisor />
           </>
         )}
       </main>

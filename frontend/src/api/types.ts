@@ -57,6 +57,33 @@ export interface SectorPopulationResponse {
   sectors: SectorPopRow[]  // busiest first
 }
 
+// /recommend
+
+export interface AirportLoad {
+  airport: string
+  rolling_arrivals: number
+  aar: number
+  utilization: number        // 0.0–1.0+ (>1 = over capacity)
+  available_capacity: number // aar - rolling_arrivals (negative = overloaded)
+  is_overloaded: boolean
+}
+
+export interface RecommendRequest {
+  airport: string            // desired destination ICAO, e.g. "KJFK"
+  time: string               // ISO-8601 UTC arrival time
+  day?: string               // YYYY-MM-DD, defaults to 2025-12-25
+  alternatives?: string[]    // ICAOs to score; defaults to all NYC core airports
+}
+
+export interface RecommendResponse {
+  requested_airport: string
+  requested_time: string
+  day: string
+  target: AirportLoad
+  alternatives: AirportLoad[]  // sorted by available_capacity desc
+  recommendation: string | null // best alternative ICAO, or null if target is fine
+}
+
 // /scenarios/{id}/routes (planned -- endpoint not yet live)
 
 // A single planned flight from the hackathon data bundle.
