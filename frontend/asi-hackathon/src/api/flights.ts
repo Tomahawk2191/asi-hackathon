@@ -2,7 +2,14 @@
 // Add a function here whenever a new backend endpoint is ready, then wrap it in a hook.
 
 import { apiFetch } from './client'
-import type { LandingsRequest, LandingsResponse, RoutesSnapshot, ScenariosResponse, SectorsResponse } from './types'
+import type {
+  LandingsRequest,
+  LandingsResponse,
+  RoutesSnapshot,
+  ScenariosResponse,
+  SectorPopulationResponse,
+  SectorsResponse,
+} from './types'
 
 // Returns the scenario list and the default scenario ID.
 export function fetchScenarios(): Promise<ScenariosResponse> {
@@ -34,4 +41,20 @@ export function fetchSnapshot(scenarioId: string): Promise<RoutesSnapshot> {
 // LOW band since landings happen at ground level.
 export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollection> {
   return apiFetch<GeoJSON.FeatureCollection>(`/sectors/geojson?band=${encodeURIComponent(band)}`)
+}
+
+// Convective weather cells (boundary polygons) for a scenario (GET /weather).
+export function fetchWeather(scenario: string): Promise<GeoJSON.FeatureCollection> {
+  return apiFetch<GeoJSON.FeatureCollection>(`/weather?scenario=${encodeURIComponent(scenario)}`)
+}
+
+// Live per-sector occupancy at a given time for one altitude band
+// (GET /sectors/population).
+export function fetchSectorPopulation(
+  scenario: string,
+  time: string,
+  band: 'LOW' | 'HIGH',
+): Promise<SectorPopulationResponse> {
+  const q = `scenario=${encodeURIComponent(scenario)}&time=${encodeURIComponent(time)}&band=${band}`
+  return apiFetch<SectorPopulationResponse>(`/sectors/population?${q}`)
 }

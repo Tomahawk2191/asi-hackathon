@@ -2,13 +2,14 @@ import { useClock } from '../hooks/useClock'
 import { useLandings } from '../hooks/useFlights'
 import { sampleFlight } from '../lib/flightModel'
 import { airportLoads, fmtClock } from '../lib/analysis'
-import type { LandingsResponse } from '../api/types'
+import type { LandingsResponse, SectorPopRow } from '../api/types'
 import type { Scenario, SectorFeature, Selection } from '../lib/types'
 
 interface Props {
   scenario: Scenario
   sectors: SectorFeature[]
   scenarioId: string | null
+  population: SectorPopRow[] | null
   selection: Selection
   onSelect: (s: Selection) => void
 }
@@ -17,6 +18,7 @@ export default function SelectionPanel({
   scenario,
   sectors,
   scenarioId,
+  population,
   selection,
   onSelect,
 }: Props) {
@@ -88,6 +90,7 @@ export default function SelectionPanel({
       data={landingsQ.data}
       loading={landingsQ.isFetching}
       error={!!landingsQ.error}
+      pop={population?.find((r) => r.name === sec?.name) ?? null}
       onSelect={onSelect}
     />
   )
@@ -98,12 +101,14 @@ function SectorPanel({
   data,
   loading,
   error,
+  pop,
   onSelect,
 }: {
   sec: SectorFeature | undefined
   data: LandingsResponse | undefined
   loading: boolean
   error: boolean
+  pop: SectorPopRow | null
   onSelect: (s: Selection) => void
 }) {
   if (!sec) return <LegendPanel />
@@ -111,10 +116,23 @@ function SectorPanel({
     ? Object.entries(data.per_airport).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     : []
   const maxC = perAirport.length ? perAirport[0][1] : 1
+  const inSector = pop?.count ?? 0
+  const over = inSector > sec.capacity
   return (
     <Panel title="SECTOR" id={sec.name} onClose={() => onSelect(null)}>
       <Row k="BAND" v={`${sec.altFrom.toLocaleString()}–${sec.altTo.toLocaleString()} ft`} />
       <Row k="CAPACITY" v={`${sec.capacity}`} />
+      <Row k="IN SECTOR NOW" v={`${inSector} / ${sec.capacity}`} accent={over} />
+      <div className="prog">
+        <div
+          className="prog-bar"
+          style={{ width: `${Math.min(1, inSector / sec.capacity) * 100}%` }}
+          data-over={over}
+        />
+      </div>
+      <div className="prog-label" data-over={over}>
+        {over ? 'OVER CAPACITY' : 'OCCUPANCY · GET /sectors/population'}
+      </div>
       <Row k="LANDINGS" v={`${data?.total_flights ?? '—'}`} accent={(data?.total_flights ?? 0) > 0} />
       <div className="panel-subhead">PER AIRPORT · GET /landings</div>
       {error ? (

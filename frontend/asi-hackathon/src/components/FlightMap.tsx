@@ -10,19 +10,50 @@ import { bucketAt } from '../lib/analysis'
 import { rollingHour } from '../lib/data'
 import { createFlightRenderer } from '../webgpu/Canvas2DFlightRenderer'
 import { INSTANCE_FLOATS, type IFlightRenderer } from '../webgpu/FlightRenderer'
+import type { SectorPopRow } from '../api/types'
 import type { Scenario, Selection } from '../lib/types'
 
 interface Props {
   scenario: Scenario
-  sectors: GeoJSON.FeatureCollection
+  sectorsLow: GeoJSON.FeatureCollection
+  sectorsHigh: GeoJSON.FeatureCollection
+  sectorBand: 'LOW' | 'HIGH'
+  population: SectorPopRow[] | null
+  weather: GeoJSON.FeatureCollection | null
+  showWeather: boolean
   selection: Selection
   onSelect: (s: Selection) => void
   onBackend: (b: 'webgpu' | 'canvas2d') => void
 }
 
 const NYC_CENTER: [number, number] = [-73.78, 40.7]
+const BANDS = ['LOW', 'HIGH'] as const
 
-export default function FlightMap({ scenario, sectors, selection, onSelect, onBackend }: Props) {
+// Choropleth fill keyed off the per-feature `ratio` (occupancy / capacity).
+const POP_FILL: maplibregl.ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['coalesce', ['feature-state', 'ratio'], 0],
+  0, 'rgba(60,125,214,0)',
+  0.01, 'rgba(70,150,220,0.12)',
+  0.5, 'rgba(95,205,225,0.26)',
+  1.0, 'rgba(255,176,0,0.45)',
+  1.5, 'rgba(255,82,51,0.62)',
+]
+const FAINT_LINE = 'rgba(120,150,190,0.22)'
+
+export default function FlightMap({
+  scenario,
+  sectorsLow,
+  sectorsHigh,
+  sectorBand,
+  population,
+  weather,
+  showWeather,
+  selection,
+  onSelect,
+  onBackend,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
@@ -31,11 +62,12 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
   const instancesRef = useRef<Float32Array>(new Float32Array(0))
   const scenarioRef = useRef(scenario)
   const selectionRef = useRef(selection)
-  const dprRef = useRef(1)
+  const bandRef = useRef(sectorBand)
   const sizeRef = useRef({ w: 1, h: 1 })
 
   scenarioRef.current = scenario
   selectionRef.current = selection
+  bandRef.current = sectorBand
 
   // --- one-time map + renderer setup ----------------------------------------
   useEffect(() => {
@@ -54,34 +86,84 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'bottom-right')
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left')
 
+    const bandData = { LOW: sectorsLow, HIGH: sectorsHigh }
+
     map.on('load', () => {
-      // --- sector grid ---
-      map.addSource('sectors', { type: 'geojson', data: sectors })
+      // --- sector grid + population choropleth, one source per band ---
+      for (const band of BANDS) {
+        const src = `sec-${band}`
+        map.addSource(src, { type: 'geojson', data: bandData[band], promoteId: 'name' })
+        map.addLayer({
+          id: `sec-fill-${band}`,
+          type: 'fill',
+          source: src,
+          layout: { visibility: band === bandRef.current ? 'visible' : 'none' },
+          paint: { 'fill-color': POP_FILL },
+        })
+        map.addLayer({
+          id: `sec-line-${band}`,
+          type: 'line',
+          source: src,
+          layout: { visibility: band === bandRef.current ? 'visible' : 'none' },
+          paint: {
+            'line-color': [
+              'case',
+              ['>', ['coalesce', ['feature-state', 'ratio'], 0], 1],
+              '#ff5233',
+              FAINT_LINE,
+            ],
+            'line-width': [
+              'case',
+              ['>', ['coalesce', ['feature-state', 'ratio'], 0], 1],
+              1.3,
+              0.5,
+            ],
+          },
+        })
+        map.addLayer({
+          id: `sec-hover-${band}`,
+          type: 'fill',
+          source: src,
+          layout: { visibility: band === bandRef.current ? 'visible' : 'none' },
+          filter: ['==', ['get', 'name'], '__none__'],
+          paint: { 'fill-color': '#cfe0ff', 'fill-opacity': 0.06 },
+        })
+        map.addLayer({
+          id: `sec-sel-${band}`,
+          type: 'line',
+          source: src,
+          layout: { visibility: band === bandRef.current ? 'visible' : 'none' },
+          filter: ['==', ['get', 'name'], '__none__'],
+          paint: { 'line-color': '#ffb000', 'line-width': 1.6, 'line-opacity': 0.95 },
+        })
+      }
+
+      // --- weather polygons (boundary outline + faint fill, no radar) ---
+      map.addSource('weather', { type: 'geojson', data: weather ?? emptyFC() })
+      const wxColor: maplibregl.ExpressionSpecification = [
+        'match',
+        ['get', 'level'],
+        'SEVERE', '#ff5233',
+        'MODERATE', '#ffb000',
+        '#5fd0e0',
+      ]
+      const wxVis = showWeather ? 'visible' : 'none'
       map.addLayer({
-        id: 'sector-fill',
+        id: 'wx-fill',
         type: 'fill',
-        source: 'sectors',
-        paint: { 'fill-color': '#3f7dd6', 'fill-opacity': 0.001 },
+        source: 'weather',
+        layout: { visibility: wxVis },
+        paint: {
+          'fill-color': wxColor,
+          'fill-opacity': ['match', ['get', 'level'], 'SEVERE', 0.1, 'MODERATE', 0.07, 0.04],
+        },
       })
       map.addLayer({
-        id: 'sector-line',
+        id: 'wx-line',
         type: 'line',
-        source: 'sectors',
-        paint: { 'line-color': '#5d7da6', 'line-width': 0.5, 'line-opacity': 0.22 },
-      })
-      map.addLayer({
-        id: 'sector-hover',
-        type: 'fill',
-        source: 'sectors',
-        filter: ['==', ['get', 'name'], '__none__'],
-        paint: { 'fill-color': '#6ea8ff', 'fill-opacity': 0.07 },
-      })
-      map.addLayer({
-        id: 'sector-sel',
-        type: 'line',
-        source: 'sectors',
-        filter: ['==', ['get', 'name'], '__none__'],
-        paint: { 'line-color': '#ffb000', 'line-width': 1.6, 'line-opacity': 0.95 },
+        source: 'weather',
+        layout: { visibility: wxVis },
+        paint: { 'line-color': wxColor, 'line-width': 1.2, 'line-opacity': 0.85, 'line-dasharray': [3, 2] },
       })
 
       // --- selected flight route ---
@@ -137,8 +219,7 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
         },
       })
 
-      // --- matrix capture: a no-op custom layer that records MapLibre's exact
-      // mercator->clip matrix every frame, so the WebGPU overlay stays locked. ---
+      // --- matrix capture for the WebGPU overlay ---
       map.addLayer({
         id: 'flight-capture',
         type: 'custom',
@@ -153,15 +234,17 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
       } as maplibregl.CustomLayerInterface)
     })
 
-    // hover highlight on sectors
+    // hover highlight on the active band
     map.on('mousemove', (e) => {
-      const f = map.queryRenderedFeatures(e.point, { layers: ['sector-fill'] })[0]
+      const layer = `sec-fill-${bandRef.current}`
+      if (!map.getLayer(layer)) return
+      const f = map.queryRenderedFeatures(e.point, { layers: [layer] })[0]
       const name = (f?.properties as any)?.name ?? '__none__'
-      if (map.getLayer('sector-hover')) map.setFilter('sector-hover', ['==', ['get', 'name'], name])
+      map.setFilter(`sec-hover-${bandRef.current}`, ['==', ['get', 'name'], name])
       map.getCanvas().style.cursor = f ? 'crosshair' : ''
     })
 
-    // unified click selection: nearest aircraft first, then airport, then sector
+    // unified click selection: nearest aircraft, then airport, then sector
     map.on('click', (e) => {
       const pick = pickFlight(e.point.x, e.point.y)
       if (pick >= 0) {
@@ -173,7 +256,8 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
         onSelect({ kind: 'airport', icao: (ap.properties as any).icao })
         return
       }
-      const sec = map.queryRenderedFeatures(e.point, { layers: ['sector-fill'] })[0]
+      const layer = `sec-fill-${bandRef.current}`
+      const sec = map.getLayer(layer) ? map.queryRenderedFeatures(e.point, { layers: [layer] })[0] : null
       if (sec) {
         onSelect({ kind: 'sector', name: (sec.properties as any).name })
         return
@@ -197,7 +281,7 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
         syncSize()
         loop()
       })
-      .catch((e) => console.error('[flight-renderer] failed to initialize', e))
+      .catch((err) => console.error('[flight-renderer] failed to initialize', err))
 
     function loop() {
       raf = requestAnimationFrame(loop)
@@ -216,7 +300,6 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
 
       const t = simClock.t
       const b = bucketAt(s, t)
-      // airports currently over capacity -> arriving aircraft flagged red
       const over = new Set<string>()
       for (const a of s.airports) if (rollingHour(a.arrivalBuckets, b) > a.capacity) over.add(a.icao)
 
@@ -249,7 +332,6 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
       r.frame({ matrix: m, instances: inst, count, timeSec: now / 1000 })
     }
 
-    // nearest active flight within threshold (CSS px). Returns flight idx or -1.
     function pickFlight(px: number, py: number): number {
       const m = matrixRef.current
       if (!m) return -1
@@ -258,7 +340,7 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
       const t = simClock.t
       const scratch2: FlightSample = { active: false, x: 0, y: 0, dx: 0, dy: 1, progress: 0 }
       let best = -1
-      let bestD = 12 * 12 // 12px radius
+      let bestD = 12 * 12
       for (const f of s.flights) {
         sampleFlight(f, t, scratch2)
         if (!scratch2.active) continue
@@ -286,7 +368,6 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
       const w = el.clientWidth
       const h = el.clientHeight
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      dprRef.current = dpr
       sizeRef.current = { w, h }
       r.resize(w, h, dpr)
     }
@@ -309,7 +390,7 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // --- update airports source when the scenario (day) changes ----------------
+  // --- airports source follows the scenario (day) ----------------------------
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -321,13 +402,63 @@ export default function FlightMap({ scenario, sectors, selection, onSelect, onBa
     else map.once('idle', apply)
   }, [scenario])
 
+  // --- band visibility toggle ------------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    for (const band of BANDS) {
+      const vis = band === sectorBand ? 'visible' : 'none'
+      for (const kind of ['fill', 'line', 'hover', 'sel']) {
+        const id = `sec-${kind}-${band}`
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
+      }
+    }
+  }, [sectorBand])
+
+  // --- population choropleth via feature-state -------------------------------
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const apply = () => {
+      const src = `sec-${sectorBand}`
+      if (!map.getSource(src)) return
+      map.removeFeatureState({ source: src })
+      if (population) {
+        for (const row of population) {
+          map.setFeatureState({ source: src, id: row.name }, { ratio: row.ratio, count: row.count })
+        }
+      }
+    }
+    if (map.isStyleLoaded()) apply()
+    else map.once('idle', apply)
+  }, [population, sectorBand])
+
+  // --- weather data + visibility ---------------------------------------------
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const apply = () => {
+      const src = map.getSource('weather') as maplibregl.GeoJSONSource | undefined
+      if (src) src.setData(weather ?? emptyFC())
+      const vis = showWeather ? 'visible' : 'none'
+      for (const id of ['wx-fill', 'wx-line']) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
+      }
+    }
+    if (map.isStyleLoaded()) apply()
+    else map.once('idle', apply)
+  }, [weather, showWeather])
+
   // --- reflect selection on the map ------------------------------------------
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
     const secName = selection?.kind === 'sector' ? selection.name : '__none__'
     const apIcao = selection?.kind === 'airport' ? selection.icao : '__none__'
-    if (map.getLayer('sector-sel')) map.setFilter('sector-sel', ['==', ['get', 'name'], secName])
+    for (const band of BANDS) {
+      const id = `sec-sel-${band}`
+      if (map.getLayer(id)) map.setFilter(id, ['==', ['get', 'name'], secName])
+    }
     if (map.getLayer('airport-sel')) map.setFilter('airport-sel', ['==', ['get', 'icao'], apIcao])
 
     const route = map.getSource('sel-route') as maplibregl.GeoJSONSource | undefined

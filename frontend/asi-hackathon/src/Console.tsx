@@ -4,7 +4,15 @@ import TopBar from './components/TopBar'
 import LoadBoard from './components/LoadBoard'
 import Timeline from './components/Timeline'
 import SelectionPanel from './components/SelectionPanel'
-import { useScenarios, useSnapshot, useSectorGeoJson } from './hooks/useFlights'
+import MapControls from './components/MapControls'
+import {
+  useScenarios,
+  useSnapshot,
+  useSectorGeoJson,
+  useWeather,
+  useSectorPopulation,
+} from './hooks/useFlights'
+import { useBucketTime } from './hooks/useClock'
 import { deriveScenario, parseLowSectors } from './lib/data'
 import { simClock } from './lib/simClock'
 import type { Selection } from './lib/types'
@@ -16,11 +24,17 @@ export default function Console() {
   const [scenarioId, setScenarioId] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection>(null)
   const [backend, setBackend] = useState<'webgpu' | 'canvas2d' | null>(null)
+  const [band, setBand] = useState<'LOW' | 'HIGH'>('LOW')
+  const [showWeather, setShowWeather] = useState(true)
 
   // --- backend data via TanStack Query ---
   const scenariosQ = useScenarios()
   const snapshotQ = useSnapshot(scenarioId)
-  const sectorsQ = useSectorGeoJson('LOW')
+  const sectorsLowQ = useSectorGeoJson('LOW')
+  const sectorsHighQ = useSectorGeoJson('HIGH')
+  const weatherQ = useWeather(scenarioId)
+  const bucketTime = useBucketTime()
+  const populationQ = useSectorPopulation(scenarioId, bucketTime, band)
 
   // pick the default scenario once the list arrives
   useEffect(() => {
@@ -36,8 +50,8 @@ export default function Console() {
     [snapshotQ.data],
   )
   const lowSectors = useMemo(
-    () => (sectorsQ.data ? parseLowSectors(sectorsQ.data) : []),
-    [sectorsQ.data],
+    () => (sectorsLowQ.data ? parseLowSectors(sectorsLowQ.data) : []),
+    [sectorsLowQ.data],
   )
 
   // sync the sim clock to each scenario's window
@@ -52,7 +66,7 @@ export default function Console() {
     if (date !== scenarioId) setScenarioId(date)
   }
 
-  const error = scenariosQ.error || snapshotQ.error || sectorsQ.error
+  const error = scenariosQ.error || snapshotQ.error || sectorsLowQ.error
   if (error) {
     return (
       <div className="boot boot-err">
@@ -66,7 +80,8 @@ export default function Console() {
     )
   }
 
-  const ready = scenario && sectorsQ.data
+  const ready = scenario && sectorsLowQ.data && sectorsHighQ.data
+  const population = populationQ.data?.sectors ?? null
 
   return (
     <div className="console">
@@ -83,7 +98,12 @@ export default function Console() {
         {ready ? (
           <FlightMap
             scenario={scenario}
-            sectors={sectorsQ.data}
+            sectorsLow={sectorsLowQ.data}
+            sectorsHigh={sectorsHighQ.data}
+            sectorBand={band}
+            population={population}
+            weather={weatherQ.data ?? null}
+            showWeather={showWeather}
             selection={selection}
             onSelect={setSelection}
             onBackend={setBackend}
@@ -101,11 +121,20 @@ export default function Console() {
 
         {ready && (
           <>
+            <MapControls
+              band={band}
+              onBand={setBand}
+              showWeather={showWeather}
+              onWeather={setShowWeather}
+              occupied={populationQ.data?.occupied ?? null}
+              total={populationQ.data?.total ?? null}
+            />
             <LoadBoard scenario={scenario} selection={selection} onSelect={setSelection} />
             <SelectionPanel
               scenario={scenario}
               sectors={lowSectors}
               scenarioId={scenarioId}
+              population={population}
               selection={selection}
               onSelect={setSelection}
             />
