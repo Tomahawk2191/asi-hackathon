@@ -7,6 +7,7 @@
 // here, off the render loop.
 
 import { lngLatToMercator } from './geo'
+import type { Metro } from './metros'
 import type { RoutesSnapshot } from '../api/types'
 import type { Airport, Flight, Scenario, SectorFeature } from './types'
 
@@ -27,6 +28,29 @@ const CAPACITY: Record<string, number> = {
   KMMU: 18,
   KBDR: 16,
   KLDJ: 12,
+  // Other metros' core hubs and relievers. Numbers reuse the backend's VMC AAR
+  // (backend/capacity.py); relievers without a published FAA profile get a
+  // sensible smaller default. Anything absent falls back to 20 below.
+  KBOS: 44,
+  KPVD: 24,
+  KBDL: 24,
+  KMHT: 18,
+  KORD: 80,
+  KMDW: 40,
+  KATL: 100,
+  KDCA: 40,
+  KIAD: 52,
+  KBWI: 40,
+  KMIA: 52,
+  KFLL: 30,
+  KPBI: 24,
+  KLAX: 60,
+  KSNA: 20,
+  KBUR: 20,
+  KONT: 20,
+  KSFO: 60,
+  KOAK: 22,
+  KSJC: 22,
 }
 
 // Parse a LOW-band sector GeoJSON FeatureCollection into SectorFeatures, keeping
@@ -57,13 +81,15 @@ export function parseLowSectors(gj: GeoJSON.FeatureCollection): SectorFeature[] 
 }
 
 // Build the render-ready Scenario from a routes snapshot fetched from the backend.
-export function deriveScenario(snap: RoutesSnapshot): Scenario {
+export function deriveScenario(snap: RoutesSnapshot, metro: Metro): Scenario {
   const windowStart = Date.parse(snap.window_start)
   const windowEnd = Date.parse(snap.window_end)
   const bucketCount = Math.max(1, Math.ceil((windowEnd - windowStart) / BUCKET_MS))
 
-  const filter = snap.nyc_filter ?? { core: [], metro_extra: [] }
-  const coreSet = new Set(filter.core)
+  // Airports that belong to the selected metro (core hubs + relievers). The
+  // timeline and airport list are scoped to this set; per-flight geometry and
+  // the arrival maps below still index ALL airports.
+  const metroSet = new Set([...metro.core, ...metro.extra])
 
   const flights: Flight[] = []
   const airportLngLat = new Map<string, { lng: number; lat: number }>()
@@ -111,7 +137,7 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
     if (t1 >= windowStart && t1 < windowEnd) {
       const b = Math.floor((t1 - windowStart) / BUCKET_MS)
       ensureAirport(rf.destination_airport_icao)[b]++
-      totals[b]++
+      if (metroSet.has(rf.destination_airport_icao)) totals[b]++
     }
 
     flights.push({
@@ -130,10 +156,10 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
     })
   }
 
-  const nyc = [...filter.core, ...filter.metro_extra]
+  const coreSet = new Set(metro.core)
   const airports: Airport[] = []
   const airportByIcao = new Map<string, Airport>()
-  for (const icao of nyc) {
+  for (const icao of [...metro.core, ...metro.extra]) {
     const ll = airportLngLat.get(icao)
     if (!ll) continue
     const buckets = arrivalsByAirport.get(icao) ?? new Int32Array(bucketCount)
@@ -163,8 +189,8 @@ export function deriveScenario(snap: RoutesSnapshot): Scenario {
     airports,
     airportByIcao,
     totalArrivalBuckets: totals,
-    coreIcaos: filter.core,
-    metroIcaos: filter.metro_extra,
+    coreIcaos: metro.core,
+    metroIcaos: metro.extra,
   }
 }
 

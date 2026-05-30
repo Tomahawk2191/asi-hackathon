@@ -654,6 +654,21 @@ button {
   letter-spacing: 0.2em;
   color: var(--txt-faint);
 }
+.metro-select {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--txt);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 5px 8px;
+  color-scheme: dark;
+}
+.metro-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .rr-select,
 .rr-input {
   font-family: var(--mono);

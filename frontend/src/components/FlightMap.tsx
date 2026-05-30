@@ -12,9 +12,11 @@ import { createFlightRenderer } from '../webgpu/Canvas2DFlightRenderer'
 import { INSTANCE_FLOATS, type IFlightRenderer } from '../webgpu/FlightRenderer'
 import type { SectorPopRow } from '../api/types'
 import type { Scenario, Selection } from '../lib/types'
+import type { Metro } from '../lib/metros'
 
 interface Props {
   scenario: Scenario
+  metro: Metro
   sectorsLow: GeoJSON.FeatureCollection
   sectorsHigh: GeoJSON.FeatureCollection
   sectorBand: 'LOW' | 'HIGH'
@@ -24,7 +26,6 @@ interface Props {
   onBackend: (b: 'webgpu' | 'canvas2d') => void
 }
 
-const NYC_CENTER: [number, number] = [-73.78, 40.7]
 const BANDS = ['LOW', 'HIGH'] as const
 
 // Choropleth fill keyed off the per-feature `ratio` (occupancy / capacity).
@@ -42,6 +43,7 @@ const FAINT_LINE = 'rgba(120,150,190,0.22)'
 
 export default function FlightMap({
   scenario,
+  metro,
   sectorsLow,
   sectorsHigh,
   sectorBand,
@@ -60,10 +62,14 @@ export default function FlightMap({
   const selectionRef = useRef(selection)
   const bandRef = useRef(sectorBand)
   const sizeRef = useRef({ w: 1, h: 1 })
+  const metroSetRef = useRef<Set<string>>(new Set())
 
   scenarioRef.current = scenario
   selectionRef.current = selection
   bandRef.current = sectorBand
+  // Flights touching the current metro: union of its core hubs and relievers.
+  // deriveScenario populates coreIcaos/metroIcaos from the selected metro.
+  metroSetRef.current = new Set([...scenario.coreIcaos, ...scenario.metroIcaos])
 
   // --- one-time map + renderer setup ----------------------------------------
   useEffect(() => {
@@ -71,8 +77,8 @@ export default function FlightMap({
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: brutalistStyle(),
-      center: NYC_CENTER,
-      zoom: 7.2,
+      center: metro.center,
+      zoom: metro.zoom,
       pitch: 0,
       bearing: 0,
       maxPitch: 70,
@@ -281,6 +287,9 @@ export default function FlightMap({
         const f = flights[i]
         sampleFlight(f, t, scratch)
         if (!scratch.active) continue
+        // Hide flights that neither depart from nor land at the active metro.
+        const ms = metroSetRef.current
+        if (!ms.has(f.dest) && !ms.has(f.origin)) continue
         let cat: number
         if (f.idx === selIdx) cat = 3
         else if (over.has(f.dest)) cat = 4
@@ -312,6 +321,9 @@ export default function FlightMap({
       for (const f of s.flights) {
         sampleFlight(f, t, scratch2)
         if (!scratch2.active) continue
+        // Match the render loop's metro filter so hidden tracks aren't clickable.
+        const ms = metroSetRef.current
+        if (!ms.has(f.dest) && !ms.has(f.origin)) continue
         const cx = m[0] * scratch2.x + m[4] * scratch2.y + m[12]
         const cw = m[3] * scratch2.x + m[7] * scratch2.y + m[15]
         if (cw <= 0) continue
@@ -357,6 +369,15 @@ export default function FlightMap({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // --- pan/zoom to the active metro ------------------------------------------
+  // The map is created at the initial metro's view; on later metro changes we
+  // fly to the new region. A fly to the current view is a harmless no-op.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    map.flyTo({ center: metro.center, zoom: metro.zoom, duration: 1200, essential: true })
+  }, [metro.id, metro.center, metro.zoom])
 
   // --- airports source follows the scenario (day) ----------------------------
   useEffect(() => {

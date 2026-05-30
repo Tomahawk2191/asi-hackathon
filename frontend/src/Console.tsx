@@ -14,6 +14,7 @@ import {
 } from './hooks/useFlights'
 import { useBucketTime } from './hooks/useClock'
 import { deriveScenario, parseLowSectors } from './lib/data'
+import { metroById, METROS, DEFAULT_METRO } from './lib/metros'
 import { simClock } from './lib/simClock'
 import type { Selection } from './lib/types'
 import './console.css'
@@ -22,6 +23,7 @@ const PREFERRED = '2025-08-21' // summer convective day — heaviest traffic
 
 export default function Console() {
   const [scenarioId, setScenarioId] = useState<string | null>(null)
+  const [metroId, setMetroId] = useState(DEFAULT_METRO)
   const [selection, setSelection] = useState<Selection>(null)
   const [backend, setBackend] = useState<'webgpu' | 'canvas2d' | null>(null)
   const [band, setBand] = useState<'LOW' | 'HIGH'>('LOW')
@@ -44,8 +46,8 @@ export default function Console() {
 
   // derive render-ready structures off the render loop
   const scenario = useMemo(
-    () => (snapshotQ.data ? deriveScenario(snapshotQ.data) : null),
-    [snapshotQ.data],
+    () => (snapshotQ.data ? deriveScenario(snapshotQ.data, metroById(metroId)) : null),
+    [snapshotQ.data, metroId],
   )
   const lowSectors = useMemo(
     () => (sectorsLowQ.data ? parseLowSectors(sectorsLowQ.data) : []),
@@ -90,12 +92,16 @@ export default function Console() {
         scenario={scenario}
         backend={backend}
         loading={snapshotQ.isFetching}
+        metros={METROS}
+        metroId={metroId}
+        onSelectMetro={setMetroId}
       />
 
       <main className="stage">
         {ready ? (
           <FlightMap
             scenario={scenario}
+            metro={metroById(metroId)}
             sectorsLow={sectorsLowQ.data}
             sectorsHigh={sectorsHighQ.data}
             sectorBand={band}

@@ -4,6 +4,7 @@ import { simClock } from '../lib/simClock'
 import { fpsTracker } from '../lib/fps'
 import { countActive, fmtClock } from '../lib/analysis'
 import type { Scenario } from '../lib/types'
+import type { Metro } from '../lib/metros'
 
 const SPEEDS = [1, 60, 180, 600]
 
@@ -14,6 +15,9 @@ interface Props {
   scenario: Scenario | null
   backend: 'webgpu' | 'canvas2d' | null
   loading?: boolean
+  metros: Metro[]
+  metroId: string
+  onSelectMetro: (id: string) => void
 }
 
 function Fps() {
@@ -34,19 +38,43 @@ function Fps() {
   )
 }
 
-export default function TopBar({ scenarios, date, onSelectDay, scenario, backend, loading }: Props) {
+export default function TopBar({
+  scenarios,
+  date,
+  onSelectDay,
+  scenario,
+  backend,
+  loading,
+  metros,
+  metroId,
+  onSelectMetro,
+}: Props) {
   const clock = useClock()
   const active = scenario ? countActive(scenario, clock.t) : 0
+  const metroLabel = (metros.find((m) => m.id === metroId) ?? metros[0])?.label ?? ''
 
   return (
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark">ASI</span>
         <span className="brand-name">AIRPORT LOAD</span>
-        <span className="brand-sub">/ NYC METRO · ARRIVAL DEMAND</span>
+        <span className="brand-sub">/ {metroLabel.toUpperCase()} · ARRIVAL DEMAND</span>
       </div>
 
       <div className="topbar-controls">
+        <select
+          className="metro-select"
+          value={metroId}
+          onChange={(e) => onSelectMetro(e.target.value)}
+          aria-label="Metro area"
+        >
+          {metros.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+
         <div className="seg">
           {scenarios.map((d) => (
             <button
