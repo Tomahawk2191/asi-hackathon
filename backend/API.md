@@ -3,21 +3,22 @@
 FastAPI backend for the ASI hackathon air-traffic tools. Base URL: `http://localhost:8000`.
 Interactive docs (Swagger): `http://localhost:8000/docs`.
 
-| Method | Path                  | Summary                                                           |
-| ------ | --------------------- | ----------------------------------------------------------------- |
-| GET    | `/`                   | Health check.                                                     |
-| GET    | `/scenarios`          | List available scenario snapshots + the default.                  |
-| GET    | `/sectors`            | Summarize all sectors (name, altitude band, capacity).            |
-| POST   | `/landings`           | Flights landing in a set of sectors, grouped by arrival airport.  |
-| GET    | `/landings`           | Convenience query-param form of `POST /landings`.                 |
-| POST   | `/refresh`            | Build & store the 5-min NYC arrival + departure tables for a day. |
-| GET    | `/refresh`            | Convenience query-param form of `POST /refresh`.                  |
-| GET    | `/arrivals`           | Read back stored NYC arrival frequency for a day.                 |
-| POST   | `/flights-inbound`    | Inbound flight count for airports at the closest stored time.     |
-| GET    | `/flights-inbound`    | Convenience query-param form of `POST /flights-inbound`.          |
-| GET    | `/departures`         | Read back stored NYC departure frequency for a day.               |
-| POST   | `/departure-capacity` | Historic **departure** count at the closest stored time.          |
-| GET    | `/departure-capacity` | Convenience query-param form of `POST /departure-capacity`.       |
+| Method | Path         | Summary                                                        |
+| ------ | ------------ | -------------------------------------------------------------- |
+| GET    | `/`          | Health check.                                                  |
+| GET    | `/scenarios` | List available scenario snapshots + the default.               |
+| GET    | `/sectors`   | Summarize all sectors (name, altitude band, capacity).         |
+| POST   | `/landings`  | Flights landing in a set of sectors, grouped by arrival airport. |
+| GET    | `/landings`  | Convenience query-param form of `POST /landings`.              |
+| POST   | `/refresh`   | Build & store the 5-min NYC arrival-frequency table for a day. |
+| GET    | `/refresh`   | Convenience query-param form of `POST /refresh`.               |
+| GET    | `/arrivals`  | Read back stored NYC arrival frequency for a day.              |
+| POST   | `/flights-inbound` | Inbound flight count for airports at the closest stored time. |
+| GET    | `/flights-inbound` | Convenience query-param form of `POST /flights-inbound`.      |
+| GET    | `/capacity_rates` | Stored VMC AAR (arrivals/hour) per airport.                   |
+| POST   | `/capacity_rates/refresh` | (Re)seed the curated VMC AAR table. Idempotent.       |
+| GET    | `/capacity_rates/refresh` | Convenience form of `POST /capacity_rates/refresh`.   |
+| GET    | `/overload`  | Rolling-hour arrival demand vs the AAR, per airport, for a day.  |
 
 ---
 
@@ -253,13 +254,87 @@ curl -s -X POST http://localhost:8000/departure-capacity -H 'Content-Type: appli
 Convenience GET forms; repeat `airports`, e.g.
 `GET /departure-capacity?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
 
+### `GET /capacity_rates`
+
+The stored **VMC AAR** (Airport Arrival Rate, arrivals/hour) per airport — the
+capacity reference used by `/overload`.
+
+> A single VMC value per airport (long-range planning under optimum conditions —
+> no weather tiers). Only the slot-controlled core airports have an AAR; metro
+> relievers return no rows (no FAA capacity profile). This is *arrivals-only*, to
+> match arrival demand — distinct from the combined FAA slot caps. Values are the
+> FAA facility-reported VMC AAR (Airport Capacity Profiles 2014). The curated
+> table is seeded automatically on first read.
+
+| Query      | Required | Description                                          |
+| ---------- | -------- | ---------------------------------------------------- |
+| `airports` | no       | ICAO filter (case-insensitive); repeat per airport.  |
+
+```json
+{ "count": 3,
+  "rates": [
+    { "airport": "KEWR", "aar": 52, "source": "FAA Airport Capacity Profiles 2014 ..." },
+    { "airport": "KJFK", "aar": 52, "source": "..." },
+    { "airport": "KLGA", "aar": 40, "source": "..." } ] }
+```
+
+```bash
+curl -s "http://localhost:8000/capacity_rates"
+curl -s "http://localhost:8000/capacity_rates?airports=KLGA"
+```
+
+### `POST /capacity_rates/refresh`
+
+(Re)seeds the curated VMC AAR table into SQLite. Idempotent: re-seeding replaces
+the whole table, never duplicates. (`GET /capacity_rates/refresh` is an
+equivalent convenience form.)
+
+```json
+{ "db_path": "/.../backend/arrivals.db", "written": 3,
+  "rates": [ { "airport": "KEWR", "aar": 52, "source": "..." }, "..." ] }
+```
+
+```bash
+curl -s -X POST http://localhost:8000/capacity_rates/refresh
+```
+
+### `GET /overload`
+
+Rolling-hour arrival **demand vs capacity** for a day. Rolls the stored 5-minute
+arrival demand into a rolling 60-minute count and compares it to each airport's
+hourly AAR, flagging the windows where demand exceeds capacity.
+
+> Refresh the day's demand (`POST /refresh`) first. The rolling-60-minute rate is
+> the meaningful, sustainable number — 15-minute bursts ×4 over-extrapolate.
+> `overload` = `rolling_arrivals - aar` (negative = spare capacity); `overloaded`
+> is strict (`rolling_arrivals > aar`).
+
+| Query     | Required | Description                                              |
+| --------- | -------- | -------------------------------------------------------- |
+| `day`     | yes      | Day to analyze, `YYYY-MM-DD` (must be refreshed).        |
+| `airport` | no       | ICAO filter; omit to analyze all capacity airports.      |
+
+```json
+{ "day": "2025-08-21", "airport": "KLGA",
+  "airports": [
+    { "airport": "KLGA", "aar": 40,
+      "peak_rolling_arrivals": 43, "overloaded_window_count": 6,
+      "series": [
+        { "bucket_start": "2025-08-21T18:00:00+00:00", "rolling_arrivals": 41,
+          "aar": 40, "overload": 1, "overloaded": true } ] } ] }
+```
+
+```bash
+curl -s "http://localhost:8000/overload?day=2025-08-21&airport=KLGA"
+```
+
 ---
 
 ### Storage
 
-`/refresh` writes to a SQLite DB (default `backend/arrivals.db`, override with
-`$ARRIVALS_DB`). Single table, one row per `(day, direction, airport, 5-min
-bucket)`, where `direction` is `'arrival'` or `'departure'`:
+`/refresh` and `/capacity_rates/refresh` write to a SQLite DB (default
+`backend/arrivals.db`, override with `$ARRIVALS_DB`). Two tables — demand (one
+row per `(day, airport, 5-min bucket)`) and capacity (one row per airport):
 
 ```sql
 CREATE TABLE flight_frequency (
@@ -270,6 +345,12 @@ CREATE TABLE flight_frequency (
     bucket_start TEXT    NOT NULL,  -- ISO-8601 UTC, start of 5-minute window
     flight_count INTEGER NOT NULL,
     PRIMARY KEY (day, direction, airport, bucket_start)
+);
+
+CREATE TABLE airport_capacity (
+    airport TEXT    PRIMARY KEY,  -- destination ICAO
+    aar     INTEGER NOT NULL,     -- VMC Airport Arrival Rate, arrivals/hour
+    source  TEXT                  -- provenance of the AAR value
 );
 ```
 
