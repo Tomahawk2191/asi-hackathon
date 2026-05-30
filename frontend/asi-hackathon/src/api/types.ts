@@ -1,4 +1,45 @@
-// TypeScript types that mirror the Pydantic models in backend/flights.py.
+// TypeScript types that mirror the Pydantic models.
+
+// /scenarios
+
+export interface ScenariosResponse {
+  scenarios: string[]   // e.g. ["asked_at_2025-05-29T21-00-00Z", ...]
+  default: string | null // earliest scenario, used when none is specified
+}
+
+// /sectors
+
+export interface SectorSummary {
+  name: string             // e.g. "LOW_295" or "HIGH_042"
+  altitude_from_ft: number // LOW = 0, HIGH = 35000
+  altitude_to_ft: number   // LOW = 35000, HIGH = 60000
+  capacity: number         // max simultaneous flights
+}
+
+export interface SectorsResponse {
+  count: number
+  sectors: SectorSummary[]
+}
+
+// /landings
+
+// POST body for /landings -- which sectors to query and which scenario to use.
+// Pass LOW band sectors (altitude_from_ft = 0) since landings happen at ground level.
+export interface LandingsRequest {
+  sector_names: string[]  // e.g. ["LOW_295"] -- use /sectors to look these up
+  scenario?: string       // omit to use the default (earliest) scenario
+}
+
+// Arrival counts per airport for the queried sector set.
+// per_airport is sorted high → low -- the most congested airport is first.
+export interface LandingsResponse {
+  scenario: string
+  sector_names: string[]
+  total_flights: number
+  per_airport: Record<string, number>  // ICAO → landing count, e.g. { KJFK: 209, KLGA: 264 }
+}
+
+// /scenarios/{id}/routes (planned -- endpoint not yet live)
 
 // A single planned flight from the hackathon data bundle.
 export interface Flight {
