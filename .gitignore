@@ -1,1 +1,6 @@
 hackathon_data_bundle
+.claude/settings.local.json
+venv/
+__pycache__/
+*.pyc
+.env
