@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Callable, TypeVar, Union
@@ -30,7 +31,11 @@ def load_json_model(path: PathLike, parser: Callable[[dict], T]) -> T:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"JSON file not found: {path}")
-    payload = json.loads(path.read_text())
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt") as fh:
+            payload = json.load(fh)
+    else:
+        payload = json.loads(path.read_text())
     return parser(payload)
 
 
