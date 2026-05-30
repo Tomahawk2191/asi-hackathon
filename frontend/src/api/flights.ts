@@ -3,8 +3,11 @@
 
 import { apiFetch } from './client'
 import type {
+  DemandDaysResponse,
   LandingsRequest,
   LandingsResponse,
+  OptimizeResponse,
+  RebalanceResponse,
   RecommendRequest,
   RecommendResponse,
   RoutesSnapshot,
@@ -52,6 +55,35 @@ export function fetchRecommendation(req: RecommendRequest): Promise<RecommendRes
     method: 'POST',
     body: JSON.stringify(req),
   })
+}
+
+// Days with stored arrival demand (incl. Christmas / multi-metro) + their metros.
+export function fetchDemandDays(): Promise<DemandDaysResponse> {
+  return apiFetch<DemandDaysResponse>('/demand-days')
+}
+
+// Demand-based per-airport load + within-metro optimization (GET /rebalance).
+// Works for every seeded day and metro. `time` optional (defaults to midpoint).
+export function fetchRebalance(
+  day: string,
+  time: string | null,
+  scope = 'all',
+): Promise<RebalanceResponse> {
+  const t = time ? `&time=${encodeURIComponent(time)}` : ''
+  return apiFetch<RebalanceResponse>(
+    `/rebalance?day=${encodeURIComponent(day)}${t}&scope=${encodeURIComponent(scope)}`,
+  )
+}
+
+// Airport load-balancing optimizer (GET /optimize): baseline + optimized
+// busyness scores for the NYC core airports at a given time.
+export function fetchOptimize(
+  scenario: string,
+  time: string,
+  window = 60,
+): Promise<OptimizeResponse> {
+  const q = `scenario=${encodeURIComponent(scenario)}&time=${encodeURIComponent(time)}&window=${window}`
+  return apiFetch<OptimizeResponse>(`/optimize?${q}`)
 }
 
 // Live per-sector occupancy at a given time for one altitude band

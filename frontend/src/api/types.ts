@@ -115,3 +115,74 @@ export interface RoutesSnapshot {
   nyc_filter?: NycFilter
   flights: Flight[]
 }
+
+// /busyness and /optimize -- airport busyness score (0-100, ~100 = saturated)
+// and the load-balancing optimizer that peak-shaves it across the core airports.
+
+export interface BusynessRow {
+  airport: string
+  inbound: number
+  outbound: number
+  movements: number
+  capacity: number | null   // VMC AAR (null for relievers)
+  has_capacity: boolean
+  score: number
+}
+
+export interface OptimizeMove {
+  flight: string
+  from: string
+  to: string
+}
+
+export interface OptimizeResponse {
+  scenario: string
+  time: string
+  candidates: string[]      // airports rebalanced (NYC core)
+  window_minutes: number
+  before: BusynessRow[]     // baseline busyness, busiest first
+  after: BusynessRow[]      // post-optimization busyness
+  moves: OptimizeMove[]
+  moved: number
+  max_before: number        // peak core score before
+  max_after: number         // peak core score after
+}
+
+// /rebalance and /demand-days -- demand-based per-airport load (rolling-60-min
+// arrivals vs AAR) with within-metro before/after optimization, across all days
+// and metros (incl. Christmas, multi-metro).
+
+export interface AirportLoadRow {
+  airport: string
+  metro: string
+  aar: number
+  arrivals_before: number
+  arrivals_after: number
+  util_before: number   // arrivals_before / aar
+  util_after: number
+}
+
+export interface MetroLoad {
+  metro: string
+  peak_before: number
+  peak_after: number
+  moved: number
+  airports: AirportLoadRow[]  // busiest first
+}
+
+export interface RebalanceResponse {
+  day: string
+  time: string
+  scope: string                       // 'all' or a metro key
+  window: { start: string; end: string }
+  metros: MetroLoad[]                 // busiest metro first
+}
+
+export interface DemandDay {
+  day: string
+  metros: string[]
+}
+
+export interface DemandDaysResponse {
+  days: DemandDay[]
+}

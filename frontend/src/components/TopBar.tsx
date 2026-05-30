@@ -7,10 +7,15 @@ import type { Scenario } from '../lib/types'
 
 const SPEEDS = [1, 60, 180, 600]
 
+interface Tab {
+  id: string
+  label: string
+}
+
 interface Props {
-  scenarios: string[]
-  date: string
-  onSelectDay: (date: string) => void
+  tabs: Tab[]
+  activeId: string
+  onSelectDay: (id: string) => void
   scenario: Scenario | null
   backend: 'webgpu' | 'canvas2d' | null
   loading?: boolean
@@ -34,28 +39,29 @@ function Fps() {
   )
 }
 
-export default function TopBar({ scenarios, date, onSelectDay, scenario, backend, loading }: Props) {
+export default function TopBar({ tabs, activeId, onSelectDay, scenario, backend, loading }: Props) {
   const clock = useClock()
-  const active = scenario ? countActive(scenario, clock.t) : 0
+  const active = scenario ? countActive(scenario, clock.t) : null
 
   return (
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark">ASI</span>
         <span className="brand-name">AIRPORT LOAD</span>
-        <span className="brand-sub">/ NYC METRO · ARRIVAL DEMAND</span>
+        <span className="brand-sub">/ MULTI-METRO · ARRIVAL DEMAND</span>
       </div>
 
       <div className="topbar-controls">
         <div className="seg">
-          {scenarios.map((d) => (
+          {tabs.map((t) => (
             <button
-              key={d}
+              key={t.id}
               className="seg-btn"
-              data-active={d === date}
-              onClick={() => onSelectDay(d)}
+              data-active={t.id === activeId}
+              data-feature={t.label === 'CHRISTMAS'}
+              onClick={() => onSelectDay(t.id)}
             >
-              {d}
+              {t.label}
             </button>
           ))}
         </div>
@@ -83,11 +89,11 @@ export default function TopBar({ scenarios, date, onSelectDay, scenario, backend
         <div className="hud-stat">
           <span className="hud-label">SIM CLOCK</span>
           <span className="hud-val mono-lg">{fmtClock(clock.t)}</span>
-          <span className="hud-sub">{date}</span>
+          <span className="hud-sub">{activeId}</span>
         </div>
         <div className="hud-stat">
           <span className="hud-label">AIRBORNE</span>
-          <span className="hud-val">{active}</span>
+          <span className="hud-val">{active ?? '—'}</span>
           <span className="hud-sub">tracks</span>
         </div>
         <Fps />

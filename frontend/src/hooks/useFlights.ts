@@ -4,7 +4,10 @@
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
+  fetchDemandDays,
   fetchLandings,
+  fetchOptimize,
+  fetchRebalance,
   fetchRecommendation,
   fetchScenarios,
   fetchSectors,
@@ -13,6 +16,23 @@ import {
   fetchSnapshot,
 } from '../api/flights'
 import type { LandingsRequest, RecommendRequest } from '../api/types'
+
+// Days with stored arrival demand (drives the day tabs, incl. Christmas).
+export function useDemandDays() {
+  return useQuery({ queryKey: ['demandDays'], queryFn: fetchDemandDays, staleTime: Infinity })
+}
+
+// Demand-based airport load + within-metro optimization for a day at a
+// (bucket-aligned) time and scope. keepPreviousData so the sidebar doesn't flash.
+export function useRebalance(day: string | null, time: string | null, scope: string) {
+  return useQuery({
+    queryKey: ['rebalance', day, time, scope],
+    queryFn: () => fetchRebalance(day!, time, scope),
+    enabled: day !== null,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
+  })
+}
 
 // Returns the full scenarios response including the default scenario ID.
 export function useScenarios() {
@@ -51,6 +71,19 @@ export function useSectorPopulation(
   return useQuery({
     queryKey: ['population', scenarioId, band, time],
     queryFn: () => fetchSectorPopulation(scenarioId!, time!, band),
+    enabled: scenarioId !== null && time !== null,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+// Airport load-balancing optimizer at a (bucket-aligned) time: baseline +
+// optimized busyness scores for the NYC core airports. keepPreviousData so the
+// score readout/circles don't flash while scrubbing between buckets.
+export function useOptimize(scenarioId: string | null, time: string | null) {
+  return useQuery({
+    queryKey: ['optimize', scenarioId, time],
+    queryFn: () => fetchOptimize(scenarioId!, time!),
     enabled: scenarioId !== null && time !== null,
     staleTime: 5 * 60 * 1000,
     placeholderData: keepPreviousData,
