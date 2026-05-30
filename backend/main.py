@@ -282,7 +282,7 @@ class RefreshRequest(BaseModel):
 
 
 def _refresh(day: Optional[str]) -> dict:
-    """Compute NYC arrival frequency from local files and write it to SQLite."""
+    """Compute NYC arrival & departure frequency from local files into SQLite."""
     available = nyc.available_days()
     if not available:
         raise HTTPException(status_code=500, detail="No NYC dataset files found.")
@@ -298,27 +298,30 @@ def _refresh(day: Optional[str]) -> dict:
     try:
         refreshed = []
         for d in days:
-            rows = nyc.nyc_arrival_frequency(load_routes(nyc.day_file(d)), sector_list)
-            written = db.write_day(conn, d, rows)
-            refreshed.append(
-                {
-                    "day": d,
+            snapshot = load_routes(nyc.day_file(d))
+            entry: dict = {"day": d}
+            for direction in nyc.DIRECTIONS.values():
+                rows = nyc.flight_frequency(snapshot, sector_list, direction)
+                written = db.write_day(conn, d, direction.name, rows)
+                entry[f"{direction.name}s"] = {
                     "rows": written,
                     "flights": sum(r["flight_count"] for r in rows),
                 }
-            )
+            refreshed.append(entry)
     finally:
         conn.close()
     return {
         "db_path": str(DB_PATH),
         "refreshed": refreshed,
-        "total_flights": sum(r["flights"] for r in refreshed),
+        "total_flights": sum(
+            v["flights"] for e in refreshed for k, v in e.items() if k != "day"
+        ),
     }
 
 
 @app.post("/refresh")
 def refresh(req: RefreshRequest):
-    """Build the 5-minute NYC arrival-frequency table for a day (or all days).
+    """Build the 5-min NYC arrival & departure frequency for a day (or all days).
 
     Reads only local bundle files and writes the result to the SQLite DB.
     """
@@ -331,21 +334,41 @@ def refresh_get(day: Optional[str] = Query(default=None)):
     return _refresh(day)
 
 
+def _read_frequency(day: str, direction: str, sector: Optional[str]) -> dict:
+    """Read back stored frequency rows for one (day, direction)."""
+    conn = db.connect(DB_PATH)
+    try:
+        rows = db.read_day(conn, day, direction, sector)
+    finally:
+        conn.close()
+    return {
+        "day": day,
+        "direction": direction,
+        "sector": sector,
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
 @app.get("/arrivals")
 def arrivals(
     day: str = Query(description="Day to read, YYYY-MM-DD (must be refreshed first)."),
     sector: Optional[str] = Query(default=None, description="Optional sector filter."),
 ):
     """Read back stored arrival frequency for a day (optionally one sector)."""
-    conn = db.connect(DB_PATH)
-    try:
-        rows = db.read_day(conn, day, sector)
-    finally:
-        conn.close()
-    return {"day": day, "sector": sector, "count": len(rows), "rows": rows}
+    return _read_frequency(day, "arrival", sector)
 
 
-# --- inbound flights (closest stored time) ----------------------------------
+@app.get("/departures")
+def departures(
+    day: str = Query(description="Day to read, YYYY-MM-DD (must be refreshed first)."),
+    sector: Optional[str] = Query(default=None, description="Optional sector filter."),
+):
+    """Read back stored departure frequency for a day (optionally one sector)."""
+    return _read_frequency(day, "departure", sector)
+
+
+# --- flight counts at the closest stored time (inbound / departure) ---------
 
 
 class FlightsInboundRequest(BaseModel):
@@ -363,8 +386,8 @@ class AirportInbound(BaseModel):
     airport: str
     sector: Optional[str] = Field(description="LOW sector the airport sits in.")
     flight_count: Optional[int] = Field(
-        description="Inbound flights in the matched 5-minute window; 0 if none that "
-        "window, null if the airport has no stored data."
+        description="Flights (inbound or departure, per the endpoint) in the "
+        "matched 5-minute window; 0 if none that window, null if no stored data."
     )
     has_data: bool = Field(
         description="Whether any stored data exists for the airport."
@@ -392,10 +415,14 @@ def _parse_time(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def compute_flights_inbound(
-    airports: list[str], time: str, day: Optional[str]
+def compute_flight_counts(
+    direction: str, airports: list[str], time: str, day: Optional[str]
 ) -> FlightsInboundResponse:
-    """Inbound flight count per airport at the stored time closest to ``time``."""
+    """Flight count per airport at the stored time closest to ``time``.
+
+    ``direction`` is ``'arrival'`` or ``'departure'`` and selects which stored
+    series to read; the closest-time logic is identical for both.
+    """
     airports = [a.upper() for a in airports]
     if not airports:
         raise HTTPException(status_code=400, detail="Provide at least one airport.")
@@ -403,14 +430,14 @@ def compute_flights_inbound(
 
     conn = db.connect(DB_PATH)
     try:
-        rows = db.read_airport_rows(conn, airports, day)
+        rows = db.read_airport_rows(conn, direction, airports, day)
     finally:
         conn.close()
     if not rows:
         raise HTTPException(
             status_code=404,
             detail={
-                "error": "No stored arrival data for these airports.",
+                "error": f"No stored {direction} data for these airports.",
                 "hint": "Call /refresh first.",
                 "airports": airports,
             },
@@ -467,8 +494,8 @@ def compute_flights_inbound(
 
 @app.post("/flights-inbound", response_model=FlightsInboundResponse)
 def flights_inbound(req: FlightsInboundRequest):
-    """Inbound flight count for a set of airports at the closest stored time."""
-    return compute_flights_inbound(req.airports, req.time, req.day)
+    """Inbound (arrival) flight count for airports at the closest stored time."""
+    return compute_flight_counts("arrival", req.airports, req.time, req.day)
 
 
 @app.get("/flights-inbound", response_model=FlightsInboundResponse)
@@ -478,7 +505,23 @@ def flights_inbound_get(
     day: Optional[str] = Query(default=None),
 ):
     """Convenience GET form of POST /flights-inbound."""
-    return compute_flights_inbound(airports, time, day)
+    return compute_flight_counts("arrival", airports, time, day)
+
+
+@app.post("/departure-capacity", response_model=FlightsInboundResponse)
+def departure_capacity(req: FlightsInboundRequest):
+    """Departure flight count for a set of airports at the closest stored time."""
+    return compute_flight_counts("departure", req.airports, req.time, req.day)
+
+
+@app.get("/departure-capacity", response_model=FlightsInboundResponse)
+def departure_capacity_get(
+    airports: list[str] = Query(default=[], description="Repeat per airport."),
+    time: str = Query(description="ISO-8601 timestamp, e.g. 2025-08-21T18:03:00Z."),
+    day: Optional[str] = Query(default=None),
+):
+    """Convenience GET form of POST /departure-capacity."""
+    return compute_flight_counts("departure", airports, time, day)
 
 
 # --- airport capacity (VMC AAR) + demand-vs-capacity overload ---------------

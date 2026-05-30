@@ -1,15 +1,21 @@
-"""NYC-metro arrival frequency.
+"""NYC-metro flight frequency (arrivals and departures).
 
-Counts flights *heading to* (arriving at) each NY-metro airport, bucketed into
-5-minute windows by scheduled landing time, and tags each airport with the LOW
-sector its footprint sits in. Reads only local bundle files
-(``data/nyc_dataset/nyc_<YYYY-MM-DD>.json``) -- no network access.
+Counts flights at each NY-metro airport, bucketed into 5-minute windows, and
+tags each airport with the LOW sector its footprint sits in. The two directions
+share one code path and differ only in which flight endpoint they look at:
 
-Reference: data/nyc_dataset/README.md
+- **arrival**   -- group by destination, bucket by scheduled landing time,
+  locate the sector at the last route waypoint (the arrival airport).
+- **departure** -- group by origin, bucket by take-off time, locate the sector
+  at the first route waypoint (the departure airport).
+
+Reads only local bundle files (``data/nyc_dataset/nyc_<YYYY-MM-DD>.json``) --
+no network access. Reference: data/nyc_dataset/README.md
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -25,6 +31,25 @@ NYC_CORE = ("KEWR", "KJFK", "KLGA")
 NYC_METRO_EXTRA = ("KBDR", "KCDW", "KFRG", "KHPN", "KISP", "KLDJ", "KMMU", "KSWF", "KTEB")
 
 BUCKET_MINUTES = 5
+
+
+@dataclass(frozen=True)
+class Direction:
+    """One flight endpoint to count -- an arrival or a departure.
+
+    Captures everything that differs between the two so the counting logic can
+    stay direction-agnostic.
+    """
+
+    name: str  # "arrival" | "departure" (also the value stored in SQLite)
+    airport_attr: str  # Flight field naming the NY-metro airport to group/filter on
+    time_attr: str  # Flight field with the timestamp to bucket
+    waypoint: int  # index into lats/lons used to locate the airport's sector
+
+
+ARRIVAL = Direction("arrival", "destination_airport_icao", "scheduled_landing_time", -1)
+DEPARTURE = Direction("departure", "origin_airport_icao", "take_off_time", 0)
+DIRECTIONS: dict[str, Direction] = {d.name: d for d in (ARRIVAL, DEPARTURE)}
 
 
 def available_days() -> list[str]:
@@ -67,15 +92,17 @@ def _sector_for_point(lon: float, lat: float, low_sectors: list[Sector]) -> Opti
     return None
 
 
-def nyc_arrival_frequency(
+def flight_frequency(
     snapshot: RoutesSnapshot,
     sectors: Iterable[Sector],
+    direction: Direction,
 ) -> list[dict]:
-    """Per-(airport, 5-min bucket) arrival counts for NY-metro airports.
+    """Per-(airport, 5-min bucket) flight counts for NY-metro airports.
 
-    A flight contributes if its destination is a NY-metro airport (an arrival).
-    It is bucketed by ``scheduled_landing_time`` and tagged with the LOW sector
-    its arrival airport sits in (constant per airport).
+    A flight contributes if the airport at ``direction``'s endpoint (origin for
+    departures, destination for arrivals) is a NY-metro airport. It is bucketed
+    by ``direction``'s timestamp and tagged with the LOW sector that airport
+    sits in (constant per airport).
 
     Returns a list of rows sorted by (bucket_start, airport):
         {"sector": str | None, "airport": str,
@@ -88,15 +115,17 @@ def nyc_arrival_frequency(
     counts: dict[tuple[str, str], int] = {}
 
     for flight in snapshot.flights:
-        dest = flight.destination_airport_icao
-        if dest not in metro or not flight.lats or not flight.lons:
+        airport = getattr(flight, direction.airport_attr)
+        if airport not in metro or not flight.lats or not flight.lons:
             continue
-        if dest not in airport_sector:
-            airport_sector[dest] = _sector_for_point(
-                flight.lons[-1], flight.lats[-1], low_sectors
+        if airport not in airport_sector:
+            airport_sector[airport] = _sector_for_point(
+                flight.lons[direction.waypoint],
+                flight.lats[direction.waypoint],
+                low_sectors,
             )
-        bucket = _floor_bucket(flight.scheduled_landing_time).isoformat()
-        counts[(dest, bucket)] = counts.get((dest, bucket), 0) + 1
+        bucket = _floor_bucket(getattr(flight, direction.time_attr)).isoformat()
+        counts[(airport, bucket)] = counts.get((airport, bucket), 0) + 1
 
     rows = [
         {

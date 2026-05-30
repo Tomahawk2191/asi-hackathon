@@ -28,12 +28,22 @@ Health check. Returns `{"message": "Hello from FastAPI"}`.
 
 ### `GET /scenarios`
 
-Lists the scenario snapshot directories from the data bundle (the valid values for
-the `scenario` field elsewhere) and the default used when `scenario` is omitted
-(the earliest one).
+Lists the available scenario ids — the `YYYY-MM-DD` date of each `nyc_<date>.json`
+snapshot in `data/nyc_dataset/` (the valid values for the `scenario`/`day` fields
+elsewhere) — and the default used when omitted (the earliest). Because scenarios
+come from the NYC dataset, `/landings` sees only NYC-metro flights.
 
 ```json
-{ "scenarios": ["asked_at_2025-05-29T21:00:00Z", "..."], "default": "asked_at_2025-05-29T21:00:00Z" }
+{
+  "scenarios": [
+    "2025-05-29",
+    "2025-08-21",
+    "2026-01-13",
+    "2026-03-04",
+    "2026-04-08"
+  ],
+  "default": "2025-05-29"
+}
 ```
 
 ### `GET /sectors`
@@ -41,8 +51,18 @@ the `scenario` field elsewhere) and the default used when `scenario` is omitted
 Summarizes every sector so you can pick names for `/landings`. Geometry is omitted.
 
 ```json
-{ "count": 712,
-  "sectors": [ { "name": "HIGH_006", "altitude_from_ft": 35000, "altitude_to_ft": 60000, "capacity": 20 }, "..." ] }
+{
+  "count": 712,
+  "sectors": [
+    {
+      "name": "HIGH_006",
+      "altitude_from_ft": 35000,
+      "altitude_to_ft": 60000,
+      "capacity": 20
+    },
+    "..."
+  ]
+}
 ```
 
 ### `POST /landings`
@@ -57,24 +77,34 @@ airport) falls inside any of the given sectors. Counts sum once across the set
 
 **Request body**
 
-| Field          | Type        | Required | Description                                                      |
-| -------------- | ----------- | -------- | ---------------------------------------------------------------- |
-| `sector_names` | `string[]`  | yes      | Sectors defining the region, e.g. `["LOW_295"]` (min 1).         |
-| `scenario`     | `string`    | no       | Scenario name (see `/scenarios`); defaults to the earliest.      |
+| Field          | Type       | Required | Description                                                                     |
+| -------------- | ---------- | -------- | ------------------------------------------------------------------------------- |
+| `sector_names` | `string[]` | yes      | Sectors defining the region, e.g. `["LOW_295"]` (min 1).                        |
+| `scenario`     | `string`   | no       | Scenario id — a `YYYY-MM-DD` date (see `/scenarios`); defaults to the earliest. |
 
 **Response** (`per_airport` sorted high → low)
 
 ```json
-{ "scenario": "asked_at_2025-08-21T18:00:00Z",
+{
+  "scenario": "2025-08-21",
   "sector_names": ["LOW_295"],
-  "total_flights": 866,
-  "per_airport": { "KLGA": 264, "KEWR": 222, "KJFK": 209, "KHPN": 77, "KTEB": 71, "KFRG": 15, "KBLM": 8 } }
+  "total_flights": 859,
+  "per_airport": {
+    "KLGA": 264,
+    "KEWR": 222,
+    "KJFK": 209,
+    "KHPN": 77,
+    "KTEB": 71,
+    "KFRG": 15,
+    "KBLM": 1
+  }
+}
 ```
 
 ```bash
 curl -s -X POST http://localhost:8000/landings \
   -H 'Content-Type: application/json' \
-  -d '{"sector_names":["LOW_295"],"scenario":"asked_at_2025-08-21T18:00:00Z"}'
+  -d '{"sector_names":["LOW_295"],"scenario":"2025-08-21"}'
 ```
 
 ### `GET /landings`
@@ -83,29 +113,39 @@ Same result as `POST /landings`, for quick manual testing. Repeat `sectors` to
 pass several; `scenario` is optional.
 
 ```bash
-curl -s "http://localhost:8000/landings?sectors=LOW_295&sectors=LOW_296&scenario=asked_at_2025-08-21T18:00:00Z"
+curl -s "http://localhost:8000/landings?sectors=LOW_295&sectors=LOW_296&scenario=2025-08-21"
 ```
 
 ### `POST /refresh`
 
-Builds the **NYC-metro arrival-frequency** table and writes it to SQLite. For
-the given day it counts flights arriving at each NY-metro airport, bucketed into
-5-minute windows by scheduled landing time, and tags each airport with the LOW
-sector it sits in. Reads **only local bundle files** (`data/nyc_dataset/`) — no
-network. Idempotent: re-running a day replaces that day's rows.
+Builds the **NYC-metro frequency** tables and writes them to SQLite. For the
+given day it computes, for **both arrivals and departures**, the count of flights
+at each NY-metro airport bucketed into 5-minute windows — arrivals by scheduled
+landing time (grouped by destination), departures by take-off time (grouped by
+origin) — each tagged with the LOW sector the airport sits in. Reads **only local
+bundle files** (`data/nyc_dataset/`) — no network. Idempotent: re-running a day
+replaces that day's rows for both directions.
 
 **Request body**
 
-| Field | Type     | Required | Description                                                      |
-| ----- | -------- | -------- | ---------------------------------------------------------------- |
+| Field | Type     | Required | Description                                                       |
+| ----- | -------- | -------- | ----------------------------------------------------------------- |
 | `day` | `string` | no       | Day as `YYYY-MM-DD` (one of the 5 NYC days). Omit to refresh all. |
 
-**Response**
+**Response** — per day, a `rows`/`flights` summary for each direction.
 
 ```json
-{ "db_path": "/.../backend/arrivals.db",
-  "total_flights": 894,
-  "refreshed": [ { "day": "2025-08-21", "rows": 480, "flights": 894 } ] }
+{
+  "db_path": "/.../backend/arrivals.db",
+  "total_flights": 1792,
+  "refreshed": [
+    {
+      "day": "2025-08-21",
+      "arrivals": { "rows": 480, "flights": 894 },
+      "departures": { "rows": 415, "flights": 898 }
+    }
+  ]
+}
 ```
 
 ```bash
@@ -117,67 +157,102 @@ curl -s -X POST http://localhost:8000/refresh -H 'Content-Type: application/json
 
 Same as `POST /refresh`: `GET /refresh?day=2025-08-21` (omit `day` for all days).
 
-### `GET /arrivals`
+### `GET /arrivals` · `GET /departures`
 
-Reads back the stored rows for a day (refresh it first), optionally filtered to
-one sector.
+Read back the stored rows for a day (refresh it first), optionally filtered to one
+sector. `/arrivals` returns the arrival series, `/departures` the departure series;
+both share the same shape and an echoed `direction` field.
 
-| Query    | Required | Description                          |
-| -------- | -------- | ------------------------------------ |
-| `day`    | yes      | Day to read, `YYYY-MM-DD`.           |
+| Query    | Required | Description                             |
+| -------- | -------- | --------------------------------------- |
+| `day`    | yes      | Day to read, `YYYY-MM-DD`.              |
 | `sector` | no       | Restrict to one sector, e.g. `LOW_295`. |
 
 ```json
-{ "day": "2025-08-21", "sector": "LOW_295", "count": 449,
-  "rows": [ { "day": "2025-08-21", "sector": "LOW_295", "airport": "KLGA",
-              "bucket_start": "2025-08-21T18:00:00+00:00", "flight_count": 2 } ] }
+{
+  "day": "2025-08-21",
+  "direction": "arrival",
+  "sector": "LOW_295",
+  "count": 449,
+  "rows": [
+    {
+      "day": "2025-08-21",
+      "direction": "arrival",
+      "sector": "LOW_295",
+      "airport": "KLGA",
+      "bucket_start": "2025-08-21T18:00:00+00:00",
+      "flight_count": 2
+    }
+  ]
+}
 ```
 
 ```bash
 curl -s "http://localhost:8000/arrivals?day=2025-08-21&sector=LOW_295"
+curl -s "http://localhost:8000/departures?day=2025-08-21&sector=LOW_295"
 ```
 
-### `POST /flights-inbound`
+### `POST /flights-inbound` · `POST /departure-capacity`
 
-Inbound flight count for a set of airports at a given time. Finds the **closest
-stored 5-minute bucket** to the requested time and returns each airport's inbound
-flight count there. Reads from the SQLite DB, so refresh the relevant day first.
+Historic flight load for a set of airports at a given time. Finds the **closest
+stored 5-minute bucket** to the requested time and returns each airport's count
+there. `/flights-inbound` uses the **arrival** series (flights inbound to each
+airport); `/departure-capacity` uses the **departure** series. Both share
+request/response shapes and read from the SQLite DB, so refresh the relevant day
+first.
 
-> This is the historic **arrivals-per-5-minutes** we store per airport (observed
-> inbound throughput / demand), not a regulatory capacity limit — that time series
-> is the only time-stamped per-airport data in the DB.
+> The count is the historic **flights-per-5-minutes** we store per airport
+> (observed throughput / demand), not a regulatory capacity limit — that time
+> series is the only time-stamped per-airport data in the DB.
 
 **Request body**
 
-| Field      | Type       | Required | Description                                                  |
-| ---------- | ---------- | -------- | ------------------------------------------------------------ |
-| `airports` | `string[]` | yes      | ICAO codes (case-insensitive), e.g. `["KJFK","KLGA"]`.       |
-| `time`     | `string`   | yes      | ISO-8601 timestamp, e.g. `2025-08-21T18:03:00Z`.             |
-| `day`      | `string`   | no       | Restrict the search to one `YYYY-MM-DD`.                     |
+| Field      | Type       | Required | Description                                            |
+| ---------- | ---------- | -------- | ------------------------------------------------------ |
+| `airports` | `string[]` | yes      | ICAO codes (case-insensitive), e.g. `["KJFK","KLGA"]`. |
+| `time`     | `string`   | yes      | ISO-8601 timestamp, e.g. `2025-08-21T18:03:00Z`.       |
+| `day`      | `string`   | no       | Restrict the search to one `YYYY-MM-DD`.               |
 
-**Response** — `flight_count` is `0` when the airport had no arrivals in the
-matched window, and `null` when the airport has no stored data at all
-(`has_data: false`).
+**Response** — `flight_count` is `0` when the airport had no flights (that
+direction) in the matched window, and `null` when the airport has no stored data
+at all (`has_data: false`).
 
 ```json
-{ "requested_time": "2025-08-21T18:03:00+00:00",
+{
+  "requested_time": "2025-08-21T18:03:00+00:00",
   "matched_time": "2025-08-21T18:05:00+00:00",
   "offset_seconds": 120,
   "day": "2025-08-21",
   "airports": [
-    { "airport": "KJFK", "sector": "LOW_295", "flight_count": 2, "has_data": true },
-    { "airport": "KLGA", "sector": "LOW_295", "flight_count": 5, "has_data": true } ] }
+    {
+      "airport": "KJFK",
+      "sector": "LOW_295",
+      "flight_count": 2,
+      "has_data": true
+    },
+    {
+      "airport": "KLGA",
+      "sector": "LOW_295",
+      "flight_count": 5,
+      "has_data": true
+    }
+  ]
+}
 ```
 
 ```bash
+# inbound (arrivals)
 curl -s -X POST http://localhost:8000/flights-inbound -H 'Content-Type: application/json' \
+  -d '{"airports":["KJFK","KLGA","KEWR"],"time":"2025-08-21T18:03:00Z"}'
+# departures
+curl -s -X POST http://localhost:8000/departure-capacity -H 'Content-Type: application/json' \
   -d '{"airports":["KJFK","KLGA","KEWR"],"time":"2025-08-21T18:03:00Z"}'
 ```
 
-### `GET /flights-inbound`
+### `GET /flights-inbound` · `GET /departure-capacity`
 
-Same as `POST /flights-inbound`: repeat `airports`, e.g.
-`GET /flights-inbound?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
+Convenience GET forms; repeat `airports`, e.g.
+`GET /departure-capacity?airports=KJFK&airports=KLGA&time=2025-08-21T18:03:00Z`.
 
 ### `GET /capacity_rates`
 
@@ -262,13 +337,14 @@ curl -s "http://localhost:8000/overload?day=2025-08-21&airport=KLGA"
 row per `(day, airport, 5-min bucket)`) and capacity (one row per airport):
 
 ```sql
-CREATE TABLE arrival_frequency (
+CREATE TABLE flight_frequency (
     day          TEXT    NOT NULL,  -- 'YYYY-MM-DD'
+    direction    TEXT    NOT NULL,  -- 'arrival' | 'departure'
     sector       TEXT,              -- LOW sector covering the airport, or NULL
-    airport      TEXT    NOT NULL,  -- destination ICAO
+    airport      TEXT    NOT NULL,  -- endpoint airport ICAO (origin or destination)
     bucket_start TEXT    NOT NULL,  -- ISO-8601 UTC, start of 5-minute window
     flight_count INTEGER NOT NULL,
-    PRIMARY KEY (day, airport, bucket_start)
+    PRIMARY KEY (day, direction, airport, bucket_start)
 );
 
 CREATE TABLE airport_capacity (
@@ -282,9 +358,9 @@ CREATE TABLE airport_capacity (
 
 ### Errors
 
-| Status | When                                                                       |
-| ------ | -------------------------------------------------------------------------- |
-| `400`  | Empty sector list (GET), unknown sector name(s), or unparseable `time`.      |
-| `404`  | Unknown `scenario`/`day`, or no stored data for the requested airports.      |
-| `422`  | Request body fails validation (e.g. empty `sector_names`/`airports`).        |
-| `500`  | `/refresh` found no NYC dataset files under `data/nyc_dataset/`.            |
+| Status | When                                                                    |
+| ------ | ----------------------------------------------------------------------- |
+| `400`  | Empty sector list (GET), unknown sector name(s), or unparseable `time`. |
+| `404`  | Unknown `scenario`/`day`, or no stored data for the requested airports. |
+| `422`  | Request body fails validation (e.g. empty `sector_names`/`airports`).   |
+| `500`  | `/refresh` found no NYC dataset files under `data/nyc_dataset/`.        |
