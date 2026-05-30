@@ -3,7 +3,13 @@
 // Results are cached -- switching between scenarios won't re-fetch data already loaded.
 
 import { useQuery } from '@tanstack/react-query'
-import { fetchLandings, fetchScenarios, fetchSectors, fetchSnapshot } from '../api/flights'
+import {
+  fetchLandings,
+  fetchScenarios,
+  fetchSectors,
+  fetchSectorGeoJson,
+  fetchSnapshot,
+} from '../api/flights'
 import type { LandingsRequest } from '../api/types'
 
 // Returns the full scenarios response including the default scenario ID.
@@ -21,6 +27,15 @@ export function useSectors() {
     queryKey: ['sectors'],
     queryFn: fetchSectors,
     staleTime: Infinity, // sector geometry doesn't change
+  })
+}
+
+// Sector polygons (GeoJSON) for the map. Static geometry -> cache forever.
+export function useSectorGeoJson(band = 'LOW') {
+  return useQuery({
+    queryKey: ['sectorGeoJson', band],
+    queryFn: () => fetchSectorGeoJson(band),
+    staleTime: Infinity,
   })
 }
 
