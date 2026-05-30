@@ -8,7 +8,7 @@ from typing import Callable, TypeVar, Union
 
 from pydantic import BaseModel
 
-from opensky import StatesResponse
+from flights import RoutesSnapshot
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -34,6 +34,6 @@ def load_json_model(path: PathLike, parser: Callable[[dict], T]) -> T:
     return parser(payload)
 
 
-def load_states(path: PathLike) -> StatesResponse:
-    """Read a saved OpenSky ``/states/all`` JSON file into a StatesResponse."""
-    return load_json_model(path, StatesResponse.from_raw)
+def load_routes(path: PathLike) -> RoutesSnapshot:
+    """Read a routes/flights JSON file into a typed RoutesSnapshot."""
+    return load_json_model(path, RoutesSnapshot.from_raw)
