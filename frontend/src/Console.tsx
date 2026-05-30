@@ -10,7 +10,6 @@ import {
   useScenarios,
   useSnapshot,
   useSectorGeoJson,
-  useWeather,
   useSectorPopulation,
 } from './hooks/useFlights'
 import { useBucketTime } from './hooks/useClock'
@@ -26,14 +25,12 @@ export default function Console() {
   const [selection, setSelection] = useState<Selection>(null)
   const [backend, setBackend] = useState<'webgpu' | 'canvas2d' | null>(null)
   const [band, setBand] = useState<'LOW' | 'HIGH'>('LOW')
-  const [showWeather, setShowWeather] = useState(true)
 
   // --- backend data via TanStack Query ---
   const scenariosQ = useScenarios()
   const snapshotQ = useSnapshot(scenarioId)
   const sectorsLowQ = useSectorGeoJson('LOW')
   const sectorsHighQ = useSectorGeoJson('HIGH')
-  const weatherQ = useWeather(scenarioId)
   const bucketTime = useBucketTime()
   const populationQ = useSectorPopulation(scenarioId, bucketTime, band)
 
@@ -103,8 +100,6 @@ export default function Console() {
             sectorsHigh={sectorsHighQ.data}
             sectorBand={band}
             population={population}
-            weather={weatherQ.data ?? null}
-            showWeather={showWeather}
             selection={selection}
             onSelect={setSelection}
             onBackend={setBackend}
@@ -125,8 +120,6 @@ export default function Console() {
             <MapControls
               band={band}
               onBand={setBand}
-              showWeather={showWeather}
-              onWeather={setShowWeather}
               occupied={populationQ.data?.occupied ?? null}
               total={populationQ.data?.total ?? null}
             />

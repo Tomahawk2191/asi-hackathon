@@ -19,8 +19,6 @@ interface Props {
   sectorsHigh: GeoJSON.FeatureCollection
   sectorBand: 'LOW' | 'HIGH'
   population: SectorPopRow[] | null
-  weather: GeoJSON.FeatureCollection | null
-  showWeather: boolean
   selection: Selection
   onSelect: (s: Selection) => void
   onBackend: (b: 'webgpu' | 'canvas2d') => void
@@ -48,8 +46,6 @@ export default function FlightMap({
   sectorsHigh,
   sectorBand,
   population,
-  weather,
-  showWeather,
   selection,
   onSelect,
   onBackend,
@@ -137,34 +133,6 @@ export default function FlightMap({
           paint: { 'line-color': '#ffb000', 'line-width': 1.6, 'line-opacity': 0.95 },
         })
       }
-
-      // --- weather polygons (boundary outline + faint fill, no radar) ---
-      map.addSource('weather', { type: 'geojson', data: weather ?? emptyFC() })
-      const wxColor: maplibregl.ExpressionSpecification = [
-        'match',
-        ['get', 'level'],
-        'SEVERE', '#ff5233',
-        'MODERATE', '#ffb000',
-        '#5fd0e0',
-      ]
-      const wxVis = showWeather ? 'visible' : 'none'
-      map.addLayer({
-        id: 'wx-fill',
-        type: 'fill',
-        source: 'weather',
-        layout: { visibility: wxVis },
-        paint: {
-          'fill-color': wxColor,
-          'fill-opacity': ['match', ['get', 'level'], 'SEVERE', 0.1, 'MODERATE', 0.07, 0.04],
-        },
-      })
-      map.addLayer({
-        id: 'wx-line',
-        type: 'line',
-        source: 'weather',
-        layout: { visibility: wxVis },
-        paint: { 'line-color': wxColor, 'line-width': 1.2, 'line-opacity': 0.85, 'line-dasharray': [3, 2] },
-      })
 
       // --- selected flight route ---
       map.addSource('sel-route', { type: 'geojson', data: emptyFC() })
@@ -432,22 +400,6 @@ export default function FlightMap({
     if (map.isStyleLoaded()) apply()
     else map.once('idle', apply)
   }, [population, sectorBand])
-
-  // --- weather data + visibility ---------------------------------------------
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    const apply = () => {
-      const src = map.getSource('weather') as maplibregl.GeoJSONSource | undefined
-      if (src) src.setData(weather ?? emptyFC())
-      const vis = showWeather ? 'visible' : 'none'
-      for (const id of ['wx-fill', 'wx-line']) {
-        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
-      }
-    }
-    if (map.isStyleLoaded()) apply()
-    else map.once('idle', apply)
-  }, [weather, showWeather])
 
   // --- reflect selection on the map ------------------------------------------
   useEffect(() => {

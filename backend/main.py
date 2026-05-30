@@ -19,7 +19,6 @@ import db
 import nyc
 import population as population_mod
 import uvicorn
-import weather as weather_mod
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from flights import RoutesSnapshot
@@ -252,28 +251,6 @@ def sectors_geojson(band: Optional[str] = Query(default=None, description="LOW o
             if str(f.get("properties", {}).get("name", "")).startswith(prefix)
         ]
     return {"type": "FeatureCollection", "features": features}
-
-
-# --- weather polygons --------------------------------------------------------
-
-
-@app.get("/weather")
-def weather(scenario: Optional[str] = Query(default=None)):
-    """Convective weather cells (boundary polygons) for a scenario, as GeoJSON.
-
-    Synthetic but deterministic per scenario date — no radar field, just the
-    cell outlines with a ``severity`` (1-3) / ``level`` property.
-    """
-    scenario = scenario or default_scenario()
-    if scenario is None:
-        raise HTTPException(status_code=400, detail="No scenario available.")
-    available = list_scenarios()
-    if scenario not in available:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Unknown scenario {scenario!r}.", "available": available},
-        )
-    return weather_mod.generate_weather(scenario)
 
 
 # --- sector population (live occupancy) -------------------------------------

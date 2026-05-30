@@ -11,7 +11,6 @@ import {
   fetchSectorGeoJson,
   fetchSectorPopulation,
   fetchSnapshot,
-  fetchWeather,
 } from '../api/flights'
 import type { LandingsRequest, RecommendRequest } from '../api/types'
 
@@ -38,16 +37,6 @@ export function useSectorGeoJson(band = 'LOW') {
   return useQuery({
     queryKey: ['sectorGeoJson', band],
     queryFn: () => fetchSectorGeoJson(band),
-    staleTime: Infinity,
-  })
-}
-
-// Convective weather polygons for a scenario. Static per scenario.
-export function useWeather(scenarioId: string | null) {
-  return useQuery({
-    queryKey: ['weather', scenarioId],
-    queryFn: () => fetchWeather(scenarioId!),
-    enabled: scenarioId !== null,
     staleTime: Infinity,
   })
 }
