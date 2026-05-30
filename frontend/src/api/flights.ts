@@ -5,6 +5,8 @@ import { apiFetch } from './client'
 import type {
   LandingsRequest,
   LandingsResponse,
+  RecommendRequest,
+  RecommendResponse,
   RoutesSnapshot,
   ScenariosResponse,
   SectorPopulationResponse,
@@ -46,6 +48,15 @@ export function fetchSectorGeoJson(band = 'LOW'): Promise<GeoJSON.FeatureCollect
 // Convective weather cells (boundary polygons) for a scenario (GET /weather).
 export function fetchWeather(scenario: string): Promise<GeoJSON.FeatureCollection> {
   return apiFetch<GeoJSON.FeatureCollection>(`/weather?scenario=${encodeURIComponent(scenario)}`)
+}
+
+// Reroute recommendation: given a target airport + arrival time, scores all
+// NYC core airports by current rolling-hour demand and returns the best alternative.
+export function fetchRecommendation(req: RecommendRequest): Promise<RecommendResponse> {
+  return apiFetch<RecommendResponse>('/recommend', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
 }
 
 // Live per-sector occupancy at a given time for one altitude band

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -688,7 +688,7 @@ def overload(
     try:
         _ensure_capacity_seeded(conn)
         aar_by_airport = {r["airport"]: r["aar"] for r in db.read_capacity(conn)}
-        demand_rows = db.read_day(conn, day)
+        demand_rows = db.read_day(conn, day, "arrival")
     finally:
         conn.close()
 
@@ -737,6 +737,147 @@ def overload(
         )
 
     return {"day": day, "airport": airport, "airports": results}
+
+
+# --- reroute recommendation --------------------------------------------------
+
+# Airports considered as reroute candidates when none specified.
+NYC_CORE = ["KJFK", "KLGA", "KEWR"]
+DEFAULT_RECOMMEND_DAY = "2025-12-25"
+
+
+def _snap_to_5min(t: datetime) -> datetime:
+    return t.replace(minute=(t.minute // 5) * 5, second=0, microsecond=0)
+
+
+def _rolling_count_at(buckets: list[dict], t: datetime) -> int:
+    """Sum arrivals across the 12 five-minute buckets ending at t (matching rolling_hour_overload)."""
+    t_snap = _snap_to_5min(t)
+    # 12 buckets × 5 min = 60 min; window is [t-55min, t] inclusive (12 steps).
+    window_start = t_snap - timedelta(minutes=55)
+    return sum(
+        int(b["flight_count"])
+        for b in buckets
+        if window_start <= datetime.fromisoformat(b["bucket_start"]) <= t_snap
+    )
+
+
+class RecommendRequest(BaseModel):
+    airport: str = Field(description="Desired destination airport ICAO, e.g. 'KJFK'.")
+    time: str = Field(description="Desired arrival time, ISO-8601 UTC.")
+    day: Optional[str] = Field(
+        default=None,
+        description="Day to analyze, YYYY-MM-DD. Defaults to 2025-12-25.",
+    )
+    alternatives: Optional[list[str]] = Field(
+        default=None,
+        description="Alternative airport ICAOs to score. Defaults to all NYC core airports.",
+    )
+
+
+class AirportLoad(BaseModel):
+    airport: str
+    rolling_arrivals: int
+    aar: int
+    utilization: float
+    available_capacity: int
+    is_overloaded: bool
+
+
+class RecommendResponse(BaseModel):
+    requested_airport: str
+    requested_time: str
+    day: str
+    target: AirportLoad
+    alternatives: list[AirportLoad]
+    recommendation: Optional[str] = Field(
+        description="ICAO of the best alternative airport, or null if target has capacity."
+    )
+
+
+@app.post("/recommend", response_model=RecommendResponse)
+def recommend(req: RecommendRequest):
+    """Reroute recommendation for a desired arrival.
+
+    Given a target airport and desired arrival time, computes rolling-60-minute
+    arrival demand for the target and all alternatives, then ranks alternatives
+    by available capacity (AAR minus current demand). Returns the best
+    alternative if the target is at or over capacity.
+    """
+    airport = req.airport.upper()
+    day = req.day or DEFAULT_RECOMMEND_DAY
+    t = _parse_time(req.time)
+
+    alts = [a.upper() for a in req.alternatives] if req.alternatives else NYC_CORE
+    all_airports = list({airport} | set(alts))
+
+    conn = db.connect(DB_PATH)
+    try:
+        _ensure_capacity_seeded(conn)
+        aar_by_airport = {r["airport"]: r["aar"] for r in db.read_capacity(conn)}
+        demand_rows = db.read_day(conn, day, "arrival")
+    finally:
+        conn.close()
+
+    if not demand_rows:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"No stored arrival demand for day {day!r}.",
+                "hint": "Seed this day first (e.g. via seed_bts.py for 2025-12-25).",
+            },
+        )
+
+    # Group demand by airport.
+    demand_by_airport: dict[str, list[dict]] = {}
+    for row in demand_rows:
+        demand_by_airport.setdefault(row["airport"], []).append(row)
+
+    def airport_load(icao: str) -> AirportLoad:
+        aar = aar_by_airport.get(icao, 0)
+        count = _rolling_count_at(demand_by_airport.get(icao, []), t)
+        util = round(count / aar, 3) if aar else 0.0
+        return AirportLoad(
+            airport=icao,
+            rolling_arrivals=count,
+            aar=aar,
+            utilization=util,
+            available_capacity=aar - count,
+            is_overloaded=count > aar,
+        )
+
+    target_load = airport_load(airport)
+    alt_loads = sorted(
+        [airport_load(a) for a in alts if a != airport],
+        key=lambda x: (-x.available_capacity, x.airport),
+    )
+
+    # Recommend the alternative with the most headroom, but only surface a
+    # redirect if the target is overloaded or within 5% of capacity.
+    recommend_icao: Optional[str] = None
+    if target_load.is_overloaded or target_load.utilization >= 0.95:
+        best = next((a for a in alt_loads if not a.is_overloaded), None)
+        if best:
+            recommend_icao = best.airport
+
+    return RecommendResponse(
+        requested_airport=airport,
+        requested_time=t.isoformat(),
+        day=day,
+        target=target_load,
+        alternatives=alt_loads,
+        recommendation=recommend_icao,
+    )
+
+
+@app.get("/recommend")
+def recommend_get(
+    airport: str = Query(description="Target airport ICAO, e.g. KJFK."),
+    time: str = Query(description="Desired arrival time, ISO-8601 UTC."),
+    day: Optional[str] = Query(default=None),
+):
+    """Convenience GET form of POST /recommend."""
+    return recommend(RecommendRequest(airport=airport, time=time, day=day))
 
 
 if __name__ == "__main__":

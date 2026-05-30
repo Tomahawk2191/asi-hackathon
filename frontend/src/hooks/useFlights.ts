@@ -5,6 +5,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchLandings,
+  fetchRecommendation,
   fetchScenarios,
   fetchSectors,
   fetchSectorGeoJson,
@@ -12,7 +13,7 @@ import {
   fetchSnapshot,
   fetchWeather,
 } from '../api/flights'
-import type { LandingsRequest } from '../api/types'
+import type { LandingsRequest, RecommendRequest } from '../api/types'
 
 // Returns the full scenarios response including the default scenario ID.
 export function useScenarios() {
@@ -79,8 +80,19 @@ export function useLandings(req: LandingsRequest | null) {
   })
 }
 
+// Reroute recommendation for a target airport at a given time.
+// Pass null to keep the query dormant (e.g. form not yet submitted).
+// Results cached per unique (airport, time, day) combination.
+export function useRecommendation(req: RecommendRequest | null) {
+  return useQuery({
+    queryKey: ['recommendation', req],
+    queryFn: () => fetchRecommendation(req!),
+    enabled: req !== null,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
 // Pass null for scenarioId to keep the query dormant.
-// Endpoint not yet live -- will return per-flight data for rerouting logic.
 export function useSnapshot(scenarioId: string | null) {
   return useQuery({
     queryKey: ['snapshot', scenarioId], // keyed by ID -- each scenario cached separately
