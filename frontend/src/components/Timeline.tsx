@@ -1,23 +1,24 @@
 import { useRef } from 'react'
 import { useClock } from '../hooks/useClock'
 import { simClock } from '../lib/simClock'
-import { bucketAt, fmtClock } from '../lib/analysis'
-import type { Scenario } from '../lib/types'
+import { fmtClock } from '../lib/analysis'
 
 interface Props {
-  scenario: Scenario
+  buckets?: Int32Array // optional arrivals-per-bucket histogram (snapshot days)
+  bucketMs?: number
 }
 
-export default function Timeline({ scenario }: Props) {
+export default function Timeline({ buckets, bucketMs }: Props) {
   const clock = useClock(20)
   const trackRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
 
-  const buckets = scenario.totalArrivalBuckets
-  const n = buckets.length
+  const n = buckets?.length ?? 0
   let max = 1
-  for (let i = 0; i < n; i++) if (buckets[i] > max) max = buckets[i]
-  const cur = bucketAt(scenario, clock.t)
+  if (buckets) for (let i = 0; i < n; i++) if (buckets[i] > max) max = buckets[i]
+  // current bucket from the clock window (works with or without a histogram)
+  const span = clock.end - clock.start
+  const cur = bucketMs && span > 0 ? Math.floor((clock.t - clock.start) / bucketMs) : -1
 
   const seekTo = (clientX: number) => {
     const el = trackRef.current
@@ -32,9 +33,9 @@ export default function Timeline({ scenario }: Props) {
       <div className="timeline-meta">
         <span className="tl-label">DEMAND TIMELINE</span>
         <span className="tl-window">
-          {fmtClock(scenario.windowStart)} → {fmtClock(scenario.windowEnd)}
+          {fmtClock(clock.start)} → {fmtClock(clock.end)}
         </span>
-        <span className="tl-label">ARR / 5MIN · PEAK {max}</span>
+        <span className="tl-label">{buckets ? `ARR / 5MIN · PEAK ${max}` : 'SCRUB TIME'}</span>
       </div>
       <div
         ref={trackRef}
@@ -47,16 +48,18 @@ export default function Timeline({ scenario }: Props) {
         onPointerMove={(e) => dragging.current && seekTo(e.clientX)}
         onPointerUp={() => (dragging.current = false)}
       >
-        <div className="tl-bars">
-          {Array.from({ length: n }, (_, i) => (
-            <div
-              key={i}
-              className="tl-bar"
-              data-cur={i === cur}
-              style={{ height: `${(buckets[i] / max) * 100}%` }}
-            />
-          ))}
-        </div>
+        {buckets && (
+          <div className="tl-bars">
+            {Array.from({ length: n }, (_, i) => (
+              <div
+                key={i}
+                className="tl-bar"
+                data-cur={i === cur}
+                style={{ height: `${(buckets[i] / max) * 100}%` }}
+              />
+            ))}
+          </div>
+        )}
         <div className="tl-playhead" style={{ left: `${clock.progress * 100}%` }} />
       </div>
     </footer>

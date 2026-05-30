@@ -19,7 +19,9 @@ import busyness
 import capacity
 import db
 import nyc
+import optimize as optimize_mod
 import population as population_mod
+import rebalance as rebalance_mod
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -863,6 +865,126 @@ def recommend_get(
 ):
     """Convenience GET form of POST /recommend."""
     return recommend(RecommendRequest(airport=airport, time=time, day=day))
+
+
+# --- airport busyness score + load-balancing optimizer ----------------------
+
+
+@app.get("/busyness")
+def busyness_score(
+    time: str = Query(description="Center time, ISO-8601 UTC."),
+    scenario: Optional[str] = Query(default=None),
+    window: int = Query(default=60, description="Window width in minutes."),
+):
+    """Per-airport busyness score (0-100, ~100 = saturated) at ``time``.
+
+    Built from the scenario's routes snapshot: ``100 * (inbound + outbound) /
+    (2 * AAR)`` over a window centered on ``time``.
+    """
+    scenario = scenario or default_scenario()
+    if scenario is None:
+        raise HTTPException(status_code=400, detail="No scenario available.")
+    if scenario not in list_scenarios():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Unknown scenario {scenario!r}.", "available": list_scenarios()},
+        )
+    when = _parse_time(time)
+    rows = busyness.airport_busyness(get_snapshot(scenario), when, window)
+    return {"scenario": scenario, "time": when.isoformat(), "window_minutes": window, "airports": rows}
+
+
+@app.get("/optimize")
+def optimize_endpoint(
+    time: str = Query(description="Center time, ISO-8601 UTC."),
+    scenario: Optional[str] = Query(default=None),
+    window: int = Query(default=60, description="Window width in minutes."),
+):
+    """Balance the busyness score across the core NYC airports at ``time``.
+
+    Reassigns in-window arrivals among KJFK / KLGA / KEWR to minimize the worst
+    airport's busyness score. Returns baseline + optimized scores and the moves.
+    """
+    scenario = scenario or default_scenario()
+    if scenario is None:
+        raise HTTPException(status_code=400, detail="No scenario available.")
+    if scenario not in list_scenarios():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Unknown scenario {scenario!r}.", "available": list_scenarios()},
+        )
+    when = _parse_time(time)
+    result = optimize_mod.rebalance(get_snapshot(scenario), when, window)
+    return {"scenario": scenario, "time": when.isoformat(), **result}
+
+
+# --- demand-based airport load balancing (all days + metros) ----------------
+
+
+@app.get("/demand-days")
+def demand_days():
+    """Days with stored arrival demand (incl. Christmas + multi-metro), and the
+    distinct metros each covers. Used to build the day tabs."""
+    conn = db.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT day, airport FROM flight_frequency WHERE direction = 'arrival'"
+        ).fetchall()
+    finally:
+        conn.close()
+    to_metro = rebalance_mod.icao_to_metro()
+    per_day: dict[str, set] = {}
+    for r in rows:
+        metro = to_metro.get(r["airport"])
+        if metro:
+            per_day.setdefault(r["day"], set()).add(metro)
+    return {
+        "days": [
+            {"day": d, "metros": sorted(per_day.get(d, []))}
+            for d in sorted(per_day)
+        ]
+    }
+
+
+@app.get("/rebalance")
+def rebalance_endpoint(
+    day: str = Query(description="Day with stored arrival demand, YYYY-MM-DD."),
+    time: Optional[str] = Query(default=None, description="Instant (ISO-8601 UTC); default = window midpoint."),
+    scope: str = Query(default="all", description="'all' or a metro key, e.g. 'nyc'."),
+):
+    """Per-airport arrival load (rolling 60 min vs AAR) and the within-metro
+    optimized load, grouped by metro. The engine behind the load sidebar."""
+    conn = db.connect(DB_PATH)
+    try:
+        _ensure_capacity_seeded(conn)
+        aar_by_airport = {r["airport"]: r["aar"] for r in db.read_capacity(conn)}
+        demand_rows = db.read_day(conn, day, "arrival")
+        bounds = conn.execute(
+            "SELECT MIN(bucket_start), MAX(bucket_start) FROM flight_frequency "
+            "WHERE day = ? AND direction = 'arrival'",
+            (day,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not demand_rows or not bounds or bounds[0] is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"No stored arrival demand for day {day!r}.", "hint": "Seed/refresh it first."},
+        )
+
+    win_start = datetime.fromisoformat(bounds[0])
+    win_end = datetime.fromisoformat(bounds[1]) + timedelta(minutes=rebalance_mod.BUCKET_MINUTES)
+    when = _parse_time(time) if time else win_start + (win_end - win_start) / 2
+
+    metros = rebalance_mod.rebalance(demand_rows, aar_by_airport, when, scope)
+    return {
+        "day": day,
+        "time": when.isoformat(),
+        "scope": scope,
+        "window": {"start": win_start.isoformat(), "end": win_end.isoformat()},
+        "metros": metros,
+    }
 
 
 if __name__ == "__main__":

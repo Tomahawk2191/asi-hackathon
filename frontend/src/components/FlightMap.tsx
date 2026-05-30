@@ -19,8 +19,10 @@ interface Props {
   sectorsHigh: GeoJSON.FeatureCollection
   sectorBand: 'LOW' | 'HIGH'
   population: SectorPopRow[] | null
+  airportScores: Record<string, number> | null
   selection: Selection
   onSelect: (s: Selection) => void
+  onBackend: (b: 'webgpu' | 'canvas2d') => void
 }
 
 const NYC_CENTER: [number, number] = [-73.78, 40.7]
@@ -45,8 +47,10 @@ export default function FlightMap({
   sectorsHigh,
   sectorBand,
   population,
+  airportScores,
   selection,
   onSelect,
+  onBackend,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -141,15 +145,35 @@ export default function FlightMap({
         paint: { 'line-color': '#ffb000', 'line-width': 1.4, 'line-opacity': 0.9, 'line-dasharray': [2, 1.5] },
       })
 
-      // --- airports ---
-      map.addSource('airports', { type: 'geojson', data: airportsFC(scenarioRef.current) })
+      // --- airports (circles colored + sized by busyness score) ---
+      map.addSource('airports', {
+        type: 'geojson',
+        data: airportsFC(scenarioRef.current),
+        promoteId: 'icao',
+      })
+      const score = ['coalesce', ['feature-state', 'score'], -1] as unknown as maplibregl.ExpressionSpecification
       map.addLayer({
         id: 'airport-dot',
         type: 'circle',
         source: 'airports',
         paint: {
-          'circle-radius': ['case', ['get', 'core'], 4.5, 3],
-          'circle-color': '#05070b',
+          'circle-radius': [
+            'interpolate', ['linear'], score,
+            -1, ['case', ['get', 'core'], 4.5, 3],
+            0, ['case', ['get', 'core'], 4.5, 3],
+            60, 6.5,
+            110, 9.5,
+          ],
+          // score < 0 means "not loaded yet" -> neutral dark fill
+          'circle-color': [
+            'interpolate', ['linear'], score,
+            -1, '#0a0e14',
+            1, '#59e6c3',
+            40, '#8fd66b',
+            65, '#ffb000',
+            90, '#ff8a3d',
+            110, '#ff5233',
+          ],
           'circle-stroke-color': ['case', ['get', 'core'], '#eaf1fb', '#7d8aa0'],
           'circle-stroke-width': ['case', ['get', 'core'], 1.6, 1],
         },
@@ -243,6 +267,7 @@ export default function FlightMap({
           return
         }
         rendererRef.current = r
+        onBackend(r.backend)
         syncSize()
         loop()
       })
@@ -397,6 +422,23 @@ export default function FlightMap({
     if (map.isStyleLoaded()) apply()
     else map.once('idle', apply)
   }, [population, sectorBand])
+
+  // --- color airport circles by busyness score (baseline / optimized) --------
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const apply = () => {
+      if (!map.getSource('airports')) return
+      map.removeFeatureState({ source: 'airports' })
+      if (airportScores) {
+        for (const [icao, score] of Object.entries(airportScores)) {
+          map.setFeatureState({ source: 'airports', id: icao }, { score })
+        }
+      }
+    }
+    if (map.isStyleLoaded()) apply()
+    else map.once('idle', apply)
+  }, [airportScores])
 
   // --- reflect selection on the map ------------------------------------------
   useEffect(() => {
