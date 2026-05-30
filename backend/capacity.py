@@ -79,6 +79,15 @@ VMC_AAR: dict[str, int] = {
 
     # ---- Phoenix ----
     "KPHX": 54,   # 3 runways; VMC ~54/hr
+
+    # ---- Houston ----
+    "KIAH": 60,   # Bush Intercontinental, 5 runways; VMC arrival-priority ~60/hr
+    "KHOU": 30,   # Hobby, 4 runways; ~30/hr
+
+    # ---- Washington DC metro ----
+    "KIAD": 60,   # Dulles, 4 runways; VMC ~60/hr
+    "KDCA": 36,   # Reagan National, slot-controlled single primary; ~36/hr
+    "KBWI": 32,   # Baltimore/Washington, 3 runways; ~32/hr
 }
 
 CAPACITY_SOURCE = (

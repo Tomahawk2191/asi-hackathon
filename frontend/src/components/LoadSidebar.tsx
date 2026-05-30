@@ -18,6 +18,8 @@ const METRO_LABEL: Record<string, string> = {
   boston: 'BOSTON',
   phoenix: 'PHOENIX',
   seattle: 'SEATTLE',
+  houston: 'HOUSTON',
+  washington: 'WASHINGTON DC',
 }
 
 interface Props {

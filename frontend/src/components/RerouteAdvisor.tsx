@@ -14,6 +14,9 @@ const AVAILABLE_DAYS = [
 const NYC_AIRPORTS = ['KJFK', 'KLGA', 'KEWR']
 
 function CapBar({ load }: { load: AirportLoad }) {
+  // 0-100 arrival-load score (rolling-hour arrivals vs AAR) — the same score
+  // the load sidebar uses; replaces the old raw arrivals/AAR ("/40") readout.
+  const score = Math.round(load.utilization * 100)
   const pct = Math.min(1, load.utilization)
   const over = load.is_overloaded
   const warn = !over && load.utilization >= 0.95
@@ -30,9 +33,10 @@ function CapBar({ load }: { load: AirportLoad }) {
       </div>
       <div className="rr-cap-nums">
         <span data-over={over} data-warn={warn}>
-          {load.rolling_arrivals}/{load.aar}
+          {score}
+          <span className="rr-score-max">/100</span>
         </span>
-        <span className="rr-util">{(load.utilization * 100).toFixed(0)}%</span>
+        <span className="rr-util">{load.rolling_arrivals} arr</span>
       </div>
     </div>
   )
@@ -65,7 +69,7 @@ export default function RerouteAdvisor() {
     <aside className="rr-panel panel">
       <div className="panel-head">
         <span>REROUTE ADVISOR</span>
-        <span className="panel-head-sub">DEMAND · AAR</span>
+        <span className="panel-head-sub">ARRIVAL LOAD · SCORE</span>
       </div>
 
       <div className="rr-form">
