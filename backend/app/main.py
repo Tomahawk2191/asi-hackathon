@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 
 from .airports import AIRPORTS, coords
 from .config import LAT_MAX, LAT_MIN, LON_MAX, LON_MIN
-from .data.sectors import load_sectors, sectors_as_geojson
+from .data.nws import fetch_alerts
 from .data.opensky import fetch_live as fetch_live_traffic
+from .data.sectors import load_sectors, sectors_as_geojson
 from .data.snapshots import get_snapshot, list_snapshots
 from .data.weather import (
     fetch_live,
@@ -21,8 +22,10 @@ from .data.weather import (
     pick_strip,
 )
 from .render.wx_png import matrix_to_png
+from .routing.rescheduler import reschedule
 from .routing.router import RouteRequest, plan
 from .sim.simulator import (
+    compute_load_grid,
     load_flights,
     positions_at,
     sector_loads_at,
@@ -97,6 +100,23 @@ def get_flights_live(limit: int = 6000):
         media_type="application/json",
         headers=headers,
     )
+
+
+@app.get("/api/sectors/series")
+def get_sectors_series(snapshot: str, start: str, end: str, bucket_minutes: int = 5):
+    """Per-bucket sector loads over a window. Lets the frontend cache once
+    and do instant slider lookups instead of round-tripping per tick."""
+    grid = compute_load_grid(snapshot, start, end, bucket_minutes)
+    idx = load_sectors()
+    caps = {s.name: s.capacity for s in idx.sectors}
+    return _orjson_response({
+        "snapshot": snapshot,
+        "start": start,
+        "end": end,
+        "bucket_minutes": bucket_minutes,
+        "grid": grid,
+        "capacities": caps,
+    })
 
 
 @app.get("/api/sectors/live")
@@ -248,6 +268,67 @@ def post_route(req: RouteRequestModel):
         "sectors_traversed": result.sectors_traversed,
         "overloaded_sectors_hit": result.overloaded_sectors_hit,
     })
+
+
+class RescheduleRequestModel(BaseModel):
+    snapshot: str
+    window_start: str  # ISO UTC
+    window_end: str    # ISO UTC
+
+
+@app.post("/api/reschedule")
+def post_reschedule(req: RescheduleRequestModel):
+    t0 = datetime.fromisoformat(req.window_start)
+    t1 = datetime.fromisoformat(req.window_end)
+    if t0.tzinfo is None: t0 = t0.replace(tzinfo=timezone.utc)
+    if t1.tzinfo is None: t1 = t1.replace(tzinfo=timezone.utc)
+    result = reschedule(req.snapshot, t0, t1)
+    return _orjson_response({
+        "summary": {
+            "flights_touched": result.summary.flights_touched,
+            "total_delay_min": result.summary.total_delay_min,
+            "total_extra_nm": result.summary.total_extra_nm,
+            "flights_descended": result.summary.flights_descended,
+            "flights_rerouted": result.summary.flights_rerouted,
+            "overload_buckets_before": result.summary.overload_buckets_before,
+            "overload_buckets_after": result.summary.overload_buckets_after,
+            "overload_cost_before": result.summary.overload_cost_before,
+            "overload_cost_after": result.summary.overload_cost_after,
+            "iterations": result.summary.iterations,
+        },
+        "loads_before": result.loads_before,
+        "loads_after": result.loads_after,
+        "series_before": result.series_before,
+        "series_after": result.series_after,
+        "loads_by_bucket_before": result.loads_by_bucket_before,
+        "loads_by_bucket_after": result.loads_by_bucket_after,
+        "window_start": result.window_start,
+        "window_end": result.window_end,
+        "bucket_minutes": result.bucket_minutes,
+        "unmitigated_buckets": result.unmitigated_buckets,
+        "modified_flights": result.modified_flights,
+    })
+
+
+@app.get("/api/alerts/live")
+def get_alerts_live():
+    try:
+        payload = fetch_alerts()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"nws unavailable: {e}")
+    headers = {
+        "X-Fetched-At": str(payload.fetched_at),
+        "X-Stale": "1" if payload.stale else "0",
+        "X-Count": str(payload.count),
+        "Access-Control-Expose-Headers": "X-Fetched-At,X-Stale,X-Count,X-Error",
+    }
+    if payload.error:
+        headers["X-Error"] = payload.error
+    return Response(
+        content=orjson.dumps(payload.geojson, option=orjson.OPT_SERIALIZE_NUMPY),
+        media_type="application/geo+json",
+        headers=headers,
+    )
 
 
 @app.get("/")

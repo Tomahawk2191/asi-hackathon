@@ -84,10 +84,102 @@ export async function getFlightsLive(limit = 6000): Promise<LiveFlightsResult> {
     error: r.headers.get("x-error"),
   };
 }
+export type SectorLoadsSeries = {
+  snapshot: string;
+  start: string;
+  end: string;
+  bucket_minutes: number;
+  /** sector_name → bucket_iso → load (sparse). */
+  grid: Record<string, Record<string, number>>;
+  capacities: Record<string, number>;
+};
+export async function getSectorLoadsSeries(
+  snapshot: string, start: string, end: string, bucket_minutes = 5,
+): Promise<SectorLoadsSeries> {
+  const q = new URLSearchParams({ snapshot, start, end, bucket_minutes: String(bucket_minutes) });
+  const r = await fetch(`${API_BASE}/api/sectors/series?${q}`);
+  if (!r.ok) throw new Error(`sectors/series: ${r.status}`);
+  return r.json();
+}
+
 export async function getSectorsLive(band?: "HIGH" | "LOW"): Promise<SectorsFC> {
   const q = new URLSearchParams();
   if (band) q.set("band", band);
   return fetch(`${API_BASE}/api/sectors/live?${q}`).then((r) => r.json());
+}
+
+export type AlertProps = {
+  event: string;
+  severity: "Extreme" | "Severe" | "Moderate" | "Minor" | "Unknown";
+  urgency: string;
+  certainty: string;
+  headline: string;
+  areaDesc: string;
+  effective: string;
+  expires: string;
+  sender: string;
+  severity_rank: number;
+};
+export type AlertsFC = GeoJSON.FeatureCollection<GeoJSON.Polygon | GeoJSON.MultiPolygon, AlertProps>;
+export type AlertsResult = { geojson: AlertsFC; count: number; fetchedAt: number; stale: boolean; error: string | null };
+
+export type ReschedSummary = {
+  flights_touched: number;
+  total_delay_min: number;
+  total_extra_nm: number;
+  flights_descended: number;
+  flights_rerouted: number;
+  overload_buckets_before: number;
+  overload_buckets_after: number;
+  overload_cost_before: number;
+  overload_cost_after: number;
+  iterations: number;
+};
+export type ModifiedFlight = {
+  flight_number: string;
+  origin: string;
+  destination: string;
+  delay_min: number;
+  extra_nm: number;
+  descended: boolean;
+  rerouted: boolean;
+  cruise_altitude_ft: number;
+};
+export type ReschedResult = {
+  summary: ReschedSummary;
+  loads_before: Record<string, number>;
+  loads_after: Record<string, number>;
+  series_before: Record<string, { t: string; load: number; cap: number }[]>;
+  series_after: Record<string, { t: string; load: number; cap: number }[]>;
+  /** sector → bucket_iso → load (sparse: only sectors w/ any traffic). */
+  loads_by_bucket_before: Record<string, Record<string, number>>;
+  loads_by_bucket_after: Record<string, Record<string, number>>;
+  window_start: string;
+  window_end: string;
+  bucket_minutes: number;
+  unmitigated_buckets: { t: string; sector: string; load: number; cap: number }[];
+  modified_flights: ModifiedFlight[];
+};
+export async function postReschedule(snapshot: string, window_start: string, window_end: string): Promise<ReschedResult> {
+  const r = await fetch(`${API_BASE}/api/reschedule`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ snapshot, window_start, window_end }),
+  });
+  if (!r.ok) throw new Error(`reschedule: ${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+export async function getAlertsLive(): Promise<AlertsResult> {
+  const r = await fetch(`${API_BASE}/api/alerts/live`);
+  if (!r.ok) throw new Error(`alerts: ${r.status}`);
+  return {
+    geojson: await r.json(),
+    count: Number(r.headers.get("x-count") ?? 0),
+    fetchedAt: Number(r.headers.get("x-fetched-at") ?? 0),
+    stale: r.headers.get("x-stale") === "1",
+    error: r.headers.get("x-error"),
+  };
 }
 export type WeatherMeta = {
   url: string;

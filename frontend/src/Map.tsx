@@ -2,25 +2,27 @@ import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 
-import type { FlightPos, RouteResponse, SectorsFC, WeatherMeta } from "./api";
+import type { AlertsFC, FlightPos, RouteResponse, SectorsFC, WeatherMeta } from "./api";
 import { registerPlaneIcons } from "./planeIcons";
 
 type Props = {
   sectors: SectorsFC | null;
   flights: FlightPos[];
   weather: WeatherMeta | null;
+  alerts: AlertsFC | null;
   route: RouteResponse | null;
   showSectors: boolean;
   showFlights: boolean;
   showWeather: boolean;
+  showAlerts: boolean;
 };
 
 // OpenFreeMap "positron" style — vector tiles, no API key required.
 const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 
 export function Map({
-  sectors, flights, weather, route,
-  showSectors, showFlights, showWeather,
+  sectors, flights, weather, alerts, route,
+  showSectors, showFlights, showWeather, showAlerts,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -41,8 +43,13 @@ export function Map({
     });
     m.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     m.on("load", () => {
-      try { m.setProjection({ type: "globe" } as any); } catch {}
-      registerPlaneIcons(m);
+      // Set loaded FIRST so any subsequent useEffect runs go through apply()
+      // directly. If projection/icons/sky throw, we still mark loaded — the
+      // downstream layers can recover from missing optional features but they
+      // cannot recover from never being asked to render.
+      loadedRef.current = true;
+      try { m.setProjection({ type: "globe" } as any); } catch (e) { console.warn("setProjection failed", e); }
+      try { registerPlaneIcons(m); } catch (e) { console.warn("registerPlaneIcons failed", e); }
       try {
         (m as any).setSky?.({
           "sky-color": "#a7c6f1",
@@ -52,8 +59,7 @@ export function Map({
           "fog-color": "#d6e3f5",
           "fog-ground-blend": 0.2,
         });
-      } catch {}
-      loadedRef.current = true;
+      } catch (e) { console.warn("setSky failed", e); }
       m.fire("style.fully-loaded");
     });
     mapRef.current = m;
@@ -72,6 +78,8 @@ export function Map({
         return;
       }
       m.addSource("sectors", { type: "geojson", data: sectors as any });
+      // Aggressive ramp: empty sectors fade to invisible, busy ones light up
+      // hard. Bright red + thick outline on overloaded so they pop on the map.
       m.addLayer({
         id: "sectors-fill",
         type: "fill",
@@ -79,19 +87,26 @@ export function Map({
         paint: {
           "fill-color": [
             "case",
-            ["==", ["get", "overloaded"], true], "#ef4444",
+            ["==", ["get", "overloaded"], true], "#ff2d55",
             [
               "interpolate", ["linear"], ["coalesce", ["get", "load_pct"], 0],
-              0,   "#1e3a8a",
-              0.4, "#3b82f6",
-              0.7, "#fbbf24",
-              1.0, "#ef4444",
+              0.00, "#0b1e4a",
+              0.20, "#1e40af",
+              0.45, "#22c55e",
+              0.65, "#fbbf24",
+              0.85, "#f97316",
+              1.00, "#ef4444",
             ],
           ],
           "fill-opacity": [
             "case",
-            ["==", ["get", "overloaded"], true], 0.55,
-            ["interpolate", ["linear"], ["coalesce", ["get", "load_pct"], 0], 0, 0.10, 1, 0.45],
+            ["==", ["get", "overloaded"], true], 0.70,
+            ["interpolate", ["linear"], ["coalesce", ["get", "load_pct"], 0],
+              0.00, 0.05,
+              0.20, 0.30,
+              0.60, 0.55,
+              1.00, 0.70,
+            ],
           ],
         },
         layout: { visibility: showSectors ? "visible" : "none" },
@@ -100,7 +115,18 @@ export function Map({
         id: "sectors-line",
         type: "line",
         source: "sectors",
-        paint: { "line-color": "rgba(20,30,50,0.35)", "line-width": 0.4 },
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["get", "overloaded"], true], "#ff2d55",
+            "rgba(20,30,50,0.35)",
+          ],
+          "line-width": [
+            "case",
+            ["==", ["get", "overloaded"], true], 2.0,
+            0.4,
+          ],
+        },
         layout: { visibility: showSectors ? "visible" : "none" },
       });
       m.on("click", "sectors-fill", (e) => {
@@ -144,8 +170,11 @@ export function Map({
         })),
       };
       const src = m.getSource("flights") as maplibregl.GeoJSONSource | undefined;
-      if (src) src.setData(data);
-      else {
+      if (src) {
+        src.setData(data);
+        m.triggerRepaint();
+        return;
+      } else {
         m.addSource("flights", { type: "geojson", data });
         m.addLayer({
           id: "flights-icons",
@@ -214,6 +243,60 @@ export function Map({
     if (loadedRef.current) apply();
     else m.once("style.fully-loaded", apply);
   }, [weather, showWeather]);
+
+  // NWS alerts: filled polygons colored by severity + outlined.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const apply = () => {
+      const data = alerts ?? ({ type: "FeatureCollection", features: [] } as any);
+      const src = m.getSource("alerts") as maplibregl.GeoJSONSource | undefined;
+      if (src) { src.setData(data); return; }
+      m.addSource("alerts", { type: "geojson", data });
+      const SEVERITY_COLOR = [
+        "match", ["get", "severity"],
+        "Extreme",  "#dc2626",
+        "Severe",   "#ef4444",
+        "Moderate", "#f97316",
+        "Minor",    "#fbbf24",
+        /* default */ "#a78bfa",
+      ] as any;
+      m.addLayer({
+        id: "alerts-fill",
+        type: "fill",
+        source: "alerts",
+        paint: { "fill-color": SEVERITY_COLOR, "fill-opacity": 0.32 },
+        layout: { visibility: showAlerts ? "visible" : "none" },
+      });
+      m.addLayer({
+        id: "alerts-outline",
+        type: "line",
+        source: "alerts",
+        paint: { "line-color": SEVERITY_COLOR, "line-width": 1.6, "line-opacity": 0.85 },
+        layout: { visibility: showAlerts ? "visible" : "none" },
+      });
+      m.on("click", "alerts-fill", (e) => {
+        const f = e.features?.[0]; if (!f) return;
+        const p = f.properties as any;
+        new maplibregl.Popup({ closeButton: true, maxWidth: "360px" }).setLngLat(e.lngLat)
+          .setHTML(`<b>${p.event}</b> <span style="color:#ef4444">[${p.severity}]</span><br/>
+            <span style="color:#aab2c2">${(p.areaDesc ?? "").slice(0, 200)}</span><br/><br/>
+            ${p.headline ?? ""}<br/>
+            <span style="color:#8a93a6">expires ${p.expires}</span>`)
+          .addTo(m);
+      });
+    };
+    if (loadedRef.current) apply();
+    else m.once("style.fully-loaded", apply);
+  }, [alerts]);
+
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    for (const id of ["alerts-fill", "alerts-outline"]) {
+      if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showAlerts ? "visible" : "none");
+    }
+  }, [showAlerts]);
 
   // ROUTE: flat line + waypoint dots
   useEffect(() => {
