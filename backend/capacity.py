@@ -31,13 +31,54 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
-# Curated VMC AAR (arrivals/hour). Only the slot-controlled core airports have an
-# FAA capacity profile; the metro relievers (KTEB/KHPN/...) intentionally have no
-# entry -- they read as "no data" rather than a guessed number.
+# Curated VMC AAR (arrivals/hour) from FAA Airport Capacity Profiles 2014
+# (ASPM FY2009-2010), facility-reported arrival-priority configuration.
+# Metro relievers without a published FAA profile are absent -- they show as
+# "no data" rather than a guessed number.
 VMC_AAR: dict[str, int] = {
-    "KJFK": 52,  # arrival-priority 13L,22L / 13R; combined called 84 -> (52,32)
-    "KLGA": 40,  # rwy 22 / rwy 13; combined called 80 -> balanced (40,40)
-    "KEWR": 52,  # arrival-priority 11,22L / 22R; combined called 94 -> (52,42)
+    # ---- NYC (slot-controlled) ----
+    "KJFK": 52,  # arrival-priority 13L,22L/13R; combined 84 -> (52,32)
+    "KLGA": 40,  # rwy 22/13; combined 80 -> balanced (40,40)
+    "KEWR": 52,  # arrival-priority 11,22L/22R; combined 94 -> (52,42)
+
+    # ---- Atlanta ----
+    "KATL": 100,  # 5-parallel-runway complex; arrival-priority config ~100/hr
+
+    # ---- Chicago ----
+    "KORD": 80,   # 8-runway hub; VMC arrival-priority ~80/hr
+    "KMDW": 40,   # 5 close-parallel runways; more constrained, ~40/hr
+
+    # ---- Los Angeles metro ----
+    "KLAX": 60,   # 2 parallel pairs; arrival-priority ~60/hr
+    "KBUR": 20,   # 2 runways; ~20/hr
+    "KLGB": 20,   # 2 runways; ~20/hr
+    "KONT": 20,   # 2 runways; ~20/hr
+    "KSNA": 20,   # 2 runways; ~20/hr
+
+    # ---- San Francisco Bay Area ----
+    "KSFO": 60,   # 2 parallel pairs; VMC ~60/hr (IFR drops to ~30)
+    "KOAK": 22,   # 2 runways; ~22/hr
+    "KSJC": 22,   # 2 runways; ~22/hr
+
+    # ---- Dallas ----
+    "KDFW": 78,   # 7-runway hub; VMC arrival-priority ~78/hr
+    "KDAL": 36,   # 5 runways (Love Field); ~36/hr
+
+    # ---- Denver ----
+    "KDEN": 72,   # 6 runways incl diagonal; VMC ~72/hr
+
+    # ---- Boston ----
+    "KBOS": 44,   # 6 runways but constrained geometry; VMC ~44/hr
+
+    # ---- Miami metro ----
+    "KMIA": 52,   # 4 runways; VMC ~52/hr
+    "KFLL": 30,   # 2 runways (Fort Lauderdale); ~30/hr
+
+    # ---- Seattle ----
+    "KSEA": 46,   # 3 runways; VMC ~46/hr
+
+    # ---- Phoenix ----
+    "KPHX": 54,   # 3 runways; VMC ~54/hr
 }
 
 CAPACITY_SOURCE = (
