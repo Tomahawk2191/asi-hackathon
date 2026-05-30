@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+import capacity
 import db
 import nyc
 import uvicorn
@@ -478,6 +479,135 @@ def flights_inbound_get(
 ):
     """Convenience GET form of POST /flights-inbound."""
     return compute_flights_inbound(airports, time, day)
+
+
+# --- airport capacity (VMC AAR) + demand-vs-capacity overload ---------------
+
+
+def _ensure_capacity_seeded(conn) -> None:
+    """Seed the curated AAR table if empty, so reads work without a refresh.
+
+    The AAR values are static curated constants (``capacity.VMC_AAR``), so there
+    is no reason to force an explicit refresh before the first read -- unlike the
+    arrival-frequency demand, which must be computed from snapshots. Idempotent.
+    """
+    if not db.read_capacity(conn):
+        db.write_capacity(conn, capacity.capacity_rows())
+
+
+def _seed_capacity() -> dict:
+    """(Re)write the curated VMC AAR table into SQLite."""
+    conn = db.connect(DB_PATH)
+    try:
+        rates = capacity.capacity_rows()
+        written = db.write_capacity(conn, rates)
+    finally:
+        conn.close()
+    return {"db_path": str(DB_PATH), "written": written, "rates": rates}
+
+
+@app.get("/capacity_rates")
+def capacity_rates(
+    airports: list[str] = Query(
+        default=[],
+        description="Optional ICAO filter; repeat per airport. Omit for all.",
+    ),
+):
+    """Read the stored VMC AAR (arrivals/hour) per airport.
+
+    The single capacity reference used by /overload. Seeds the curated table on
+    first read. Only the slot-controlled core airports (KJFK/KLGA/KEWR) have an
+    AAR; metro relievers are absent (no FAA capacity profile).
+    """
+    wanted = [a.upper() for a in airports] or None
+    conn = db.connect(DB_PATH)
+    try:
+        _ensure_capacity_seeded(conn)
+        rates = db.read_capacity(conn, wanted)
+    finally:
+        conn.close()
+    return {"count": len(rates), "rates": rates}
+
+
+@app.post("/capacity_rates/refresh")
+def capacity_rates_refresh():
+    """(Re)seed the curated VMC AAR table into SQLite. Idempotent."""
+    return _seed_capacity()
+
+
+@app.get("/capacity_rates/refresh")
+def capacity_rates_refresh_get():
+    """Convenience GET form of POST /capacity_rates/refresh."""
+    return _seed_capacity()
+
+
+@app.get("/overload")
+def overload(
+    day: str = Query(description="Day to analyze, YYYY-MM-DD (must be refreshed)."),
+    airport: Optional[str] = Query(
+        default=None,
+        description="Optional ICAO filter; omit to analyze all capacity airports.",
+    ),
+):
+    """Rolling-hour arrival demand vs the VMC AAR, per airport, for a day.
+
+    Rolls the stored 5-minute arrival demand into a rolling 60-minute count and
+    compares it to each airport's hourly AAR, flagging the windows where demand
+    exceeds capacity. Refresh the day's demand (POST /refresh) first.
+    """
+    conn = db.connect(DB_PATH)
+    try:
+        _ensure_capacity_seeded(conn)
+        aar_by_airport = {r["airport"]: r["aar"] for r in db.read_capacity(conn)}
+        demand_rows = db.read_day(conn, day)
+    finally:
+        conn.close()
+
+    if not demand_rows:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"No stored arrival demand for day {day!r}.",
+                "hint": "Call /refresh first.",
+            },
+        )
+
+    if airport is not None:
+        airport = airport.upper()
+        if airport not in aar_by_airport:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"No stored capacity (AAR) for {airport!r}.",
+                    "available": sorted(aar_by_airport),
+                },
+            )
+        targets = [airport]
+    else:
+        targets = sorted(aar_by_airport)
+
+    demand_by_airport: dict[str, list[dict]] = {}
+    for row in demand_rows:
+        demand_by_airport.setdefault(row["airport"], []).append(row)
+
+    results = []
+    for icao in targets:
+        aar = aar_by_airport[icao]
+        series = capacity.rolling_hour_overload(demand_by_airport.get(icao, []), aar)
+        overloaded = [s for s in series if s["overloaded"]]
+        results.append(
+            {
+                "airport": icao,
+                "aar": aar,
+                "peak_rolling_arrivals": max(
+                    (s["rolling_arrivals"] for s in series), default=0
+                ),
+                "overloaded_window_count": len(overloaded),
+                "series": series,
+            }
+        )
+
+    return {"day": day, "airport": airport, "airports": results}
 
 
 if __name__ == "__main__":

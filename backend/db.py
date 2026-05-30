@@ -1,8 +1,12 @@
-"""SQLite storage for NYC-metro arrival frequency.
+"""SQLite storage for NYC-metro arrival frequency and airport capacity.
 
-One table, ``arrival_frequency``, holding per-(day, airport, 5-min bucket)
-arrival counts. Writes are idempotent per day: refreshing a day replaces that
-day's rows.
+Two tables:
+
+- ``arrival_frequency`` -- per-(day, airport, 5-min bucket) arrival counts
+  (demand). Writes are idempotent per day: refreshing a day replaces that day's
+  rows.
+- ``airport_capacity`` -- one VMC AAR (arrivals/hour) per airport (the capacity
+  reference, sibling to demand). Writes replace the whole curated table.
 """
 
 from __future__ import annotations
@@ -27,6 +31,12 @@ CREATE TABLE IF NOT EXISTS arrival_frequency (
     PRIMARY KEY (day, airport, bucket_start)
 );
 CREATE INDEX IF NOT EXISTS idx_arrival_day_sector ON arrival_frequency(day, sector);
+
+CREATE TABLE IF NOT EXISTS airport_capacity (
+    airport TEXT    PRIMARY KEY,  -- destination ICAO
+    aar     INTEGER NOT NULL,     -- VMC Airport Arrival Rate, arrivals/hour
+    source  TEXT                  -- provenance of the AAR value
+);
 """
 
 
@@ -98,4 +108,43 @@ def read_airport_rows(
     if day is not None:
         query += " AND day = ?"
         params.append(day)
+    return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def write_capacity(conn: sqlite3.Connection, rows: Iterable[dict]) -> int:
+    """Replace the whole ``airport_capacity`` table with ``rows``.
+
+    Each row needs keys ``airport`` and ``aar``; ``source`` is optional. The
+    curated capacity table is small and seeded as a unit, so a refresh clears it
+    and rewrites -- idempotent: re-seeding replaces, never duplicates. Returns
+    the number of rows written.
+    """
+    rows = list(rows)
+    with conn:  # commit/rollback transaction
+        conn.execute("DELETE FROM airport_capacity")
+        conn.executemany(
+            "INSERT INTO airport_capacity (airport, aar, source) VALUES (?, ?, ?)",
+            [(r["airport"], r["aar"], r.get("source")) for r in rows],
+        )
+    return len(rows)
+
+
+def read_capacity(
+    conn: sqlite3.Connection,
+    airports: Optional[Iterable[str]] = None,
+) -> list[dict]:
+    """Read stored AARs, optionally restricted to a set of airports.
+
+    Returns rows ``{"airport", "aar", "source"}`` ordered by airport.
+    """
+    query = "SELECT airport, aar, source FROM airport_capacity"
+    params: list = []
+    if airports is not None:
+        airports = list(airports)
+        if not airports:
+            return []
+        placeholders = ",".join("?" for _ in airports)
+        query += f" WHERE airport IN ({placeholders})"
+        params = list(airports)
+    query += " ORDER BY airport"
     return [dict(row) for row in conn.execute(query, params).fetchall()]
